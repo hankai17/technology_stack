@@ -1,0 +1,3 @@
+regex: \b(?:and|or|\|\||&&)(?:/\*|\s|\r|\n|\*/|\(?:|'|"|\x0b|\a0)+(?:.*)[/\*|\s|\r|\n|\*/|.|\(?:|'|"]*=
+size: 1
+or path: https://oa.m.ksyun.com/sp***************************x.html?_rdm=1691740825081","errno":2601002,"errString":"Authentication failed. not in safe domain or path: https://oa.m.ksyun.com/sp***************************x.html?_rdm=1691740825081 (error code: 20448)"} https://oa.m.ksyun.com/spa/workflow/static4form/index.html?_rdm=1691740825081#/main/workflow/req?em_auth_userid=8347&resourcetype=0&resourceid=425467&requestid=425467&em_client_lang=zh&from=single_chat_link&em_auth_code=440facee-2d70-4c5f-96f9-dc8c9641a16e&isFormMsg=1&em_client_type=pc&outsysid=b114f9ce3e4946b8a6503d1f83658a28&_key=

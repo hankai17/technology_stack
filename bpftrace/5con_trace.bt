@@ -1,0 +1,60 @@
+#!/usr/bin/bpftrace --unsafe 
+#include <net/sock.h>
+#include <linux/in.h>
+#include <linux/in6.h>
+
+BEGIN
+{
+  printf("Welcome to Offensive BPF... Use Ctrl-C to exit.\n");
+}
+
+tracepoint:syscalls:sys_enter_accept*
+{ 
+  @sk[tid] = args->upeer_sockaddr;
+}
+
+tracepoint:syscalls:sys_exit_accept*
+/ @sk[tid] /
+{
+  @sys_accepted[tid] = @sk[tid]; 
+  $sa = (struct sockaddr *) @sk[tid];
+  if ($sa->sa_family == AF_INET) {
+     $s = (struct sockaddr_in *) @sk[tid];
+     $port = ($s->sin_port>>8) | (($s->sin_port<<8) &0xff00);
+     printf("%-16s %-5d  \n",ntop(AF_INET,$s->sin_addr.s_addr),$port);
+   }
+}
+
+tracepoint:syscalls:sys_enter_recvfrom
+/ @sys_accepted[tid] /
+{   
+  @fds[tid]=args->fd;
+  @sys_read[tid] = args->ubuf;
+}
+
+tracepoint:syscalls:sys_exit_recvfrom
+{
+   $len = args->ret;
+
+  if ((@sys_read[tid] != 0) && ($len > 5))
+  { 
+    printf("sys_read > 5\n");
+  } 
+}
+
+//tracepoint:syscalls:sys_enter_writev,tracepoint:syscalls:sys_enter_write
+/// @exec[tid] /
+//{
+//  printf("write to client:");
+//}
+
+END
+{
+    //clear(@cmds);
+    clear(@fds);
+    //clear(@exec);
+    clear(@sk);
+    clear(@sys_read);
+    clear(@sys_accepted);
+    printf("Exiting. Bye.\n");
+}

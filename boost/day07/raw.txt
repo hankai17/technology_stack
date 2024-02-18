@@ -1,0 +1,1 @@
+UID:2000136919\n任务ID：d57a489f-23af-414e-94a5-512b1843d701\n报错信息：\t{\"ErrType\":\"SourceError\",\"ErrMessage\":\"show Create Table Error: thread is 0 table name is lfrms2_promotion_online.pro_md_program the error is database(or table) database()Mapping error\"}\n麻烦帮忙看下这个表名不匹配问题是为什么，以及如何处理规避下，是否需要客户配合修改源库

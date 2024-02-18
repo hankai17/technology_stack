@@ -1,0 +1,92 @@
+#!/usr/local/bin/bpftrace
+/*
+ * tcpaccept-tp - Trace TCP passive connections (accept()) using tracepoints.
+ *
+ * See BPF Performance Tools, Chapter 10, for an explanation of this tool.
+ *
+ * Copyright (c) 2019 Brendan Gregg.
+ * Licensed under the Apache License, Version 2.0 (the "License").
+ * This was originally created for the BPF Performance Tools book
+ * published by Addison Wesley. ISBN-13: 9780136554820
+ * When copying or porting, include this comment.
+ *
+ * 07-Apr-2019  Brendan Gregg   Created this.
+ */
+
+#include <net/tcp_states.h>
+#include <linux/socket.h>
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/in.h>
+#include <linux/netdevice.h>
+#include <net/ip_fib.h>
+#include <net/route.h>
+#include <linux/mroute.h>
+
+BEGIN
+{
+	printf("%-8s %-3s %-14s %-5s %-14s %-5s\n", "TIME", "IP",
+	    "RADDR", "RPORT", "LADDR", "LPORT");
+}
+
+
+//kprobe:__fib_lookup
+//{
+//    //printf("%s\n", kstack);
+//}
+
+kprobe:ip_route_input_slow
+{
+	$skb = (struct sk_buff *)arg0;  // superping.bt
+	$iph = (struct iphdr *)($skb->head + $skb->network_header);
+	if ($iph->protocol == IPPROTO_TCP) {
+	    $dev = (struct net_device *)arg4;
+        $res = (struct fib_result *)arg5;
+
+        //printf("%s\n", kstack);
+        printf("skb->mark: %d\n", $skb->mark);
+        //printf("is tcp dev: %s\n", $skb->dev->name);
+        //printf("ifindex: %d, name: %s\n", $dev->ifindex, $dev->name);
+        if ($res->type == RTN_LOCAL) {
+            printf("res->type RTN_LOCAL\n");
+        }
+
+        
+    }
+    
+}
+
+//kprobe:ip_route_output_flow
+//{
+//    printf("%s\n", kstack);
+//}
+
+//kprobe:tcp_v4_send_synack
+//{
+//}
+
+kretprobe:ip_route_output_flow
+{
+	$rt = (struct rtable *)retval;
+	//$sock = (struct sock *)arg2; // tcpretrans.bt tcplife.bt tcpaccept.bt
+    //printf("dev: %s\n", $rt->idev->dev->name);
+    printf("rt->type: %d, gentid: %d, iif: %d, gateway: %d, dev: %s, dst->dev->ifindex: %d\n", 
+        $rt->rt_type, 
+        $rt->rt_genid, 
+        $rt->rt_iif,
+        $rt->rt_gateway,
+        $rt->dst.dev->name,
+        $rt->dst.dev->ifindex);
+}
+
+//kprobe:ip_local_deliver
+//{
+//	$skb = (struct sk_buff *)arg0;
+//	$iph = (struct iphdr *)($skb->head + $skb->network_header);
+//	if ($iph->protocol == IPPROTO_TCP) {
+//        //$rt = (struct rtable *)((struct dst_entry *)($skb->_skb_refdst & (~1UL)));
+//        $rt = (struct rtable *)($skb->_skb_refdst);
+//        printf("rt->type: %d\n", $rt->rt_type);
+//    }
+//}
+

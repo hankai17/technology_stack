@@ -1,0 +1,260 @@
+
+alarm   <===>   space->loss_time
+
+
+
+
+
+
+
+
+
+gettimer                                                            ---> 读alarm
+
+wait
+
+recvpacket
+    收普通包:
+    收ack: darap + updateRTT + dlp + sldt<loss_time/pto>            ---> 写alarm
+        1. 
+
+alarm超时回调                                                       ---> 读alarm    超时回调为何放这里判断?
+    超时回调时也对应(loss_time/pto)
+    1. 如果收到过ack且有"薛定谔的包" 那么调dlp检测把 可能丢失的包打散到retrans队列里
+    2. 如果没有收到过ack/或暂时没有丢包 即space的loss_time为0 那么就是pto场景 ++pto_count从而影响send_mode
+
+sendpacket
+    发普通诱包则sldt<loss_time/pto> 用哪个时间？                    ---> 写alarm
+    1. 如果曾经收到过ack 那么会有space概念 且如果有"薛定谔的包"(很少遇到) 那么更新成space->loss_time  因为它更老   
+    2. 如果没有收到过ack 那么不会有space概念 那么就更新成pto
+
+    "薛定谔的包"优先级大于pto 因为先算老账
+    一般1的场景很难遇到 那么也就是说space的loss_time大部分情况都是0 alarm直接设置为pto
+
+
+SendPTOAppData
+
+QueueProbePacket
+
+
+0. 设计顺序耐人寻味: alarm超时回调 为何放到 recvpacket后边?
+1. 对于发包一端: 整个流程是<收ack->发包>循环  对于收包一端: 整个流程是<收包->发ack>循环 --->即都是先收包 后发包
+2. 发包/收ack 两个流程同样是更新alarm 着重点不同: 发包时alarm很大可能被设置为pto 收ack时很大可能被设置为loss_time
+    1.1 loss_time非空意味着什么? 
+        1.1.1 发包一端: 意味着在一个收发包周期内 有"薛定谔的包"存在 那么优先处理"薛定谔的包"
+        1.1.2 收包一端: 没有意义
+
+0. 如何确保pto > now 即在gettimer里拿到的alarm<loss_time/pto>永远是个大于当前时间的值?
+    1. 顺序保证: 因为所有的写alarm操作均在下面
+
+1. 如何确保pto 稍微大于将来的rtt 且 小于rto
+
+0. rtt之所以慢: 
+    1.1 是因为发ack包走的也是sendPacket流程 而sendPacket是一个条件等待 依赖于上层发包 上层不发包那么就会等待    直到超时
+    1.2 getAckFrame里面计算ack_delay不准确 因为要过一下底层async收发 async收发也占用时间
+
+1. dlp隐含着轮的概念:
+	发包时可能因为乱序 到对端时则有洞 如果对端很快返回带洞ack 当我收到该ack时 对端可能收到了乱序包
+	得考虑乱序问题 所以系数>1 给这些洞的乱序包机会
+
+2. 为什么需要流控:
+   	发1000个包实际上对端只收到了前100 尾包900个全部丢失 如果无止境的发下去那么永远没有机会进行timeout设置pto
+
+3. 收包一端只收包 那么就会造成 响应尾包ack时会偶发性慢: 
+    如果尾包到来 没有达到PacketsBeforeAck 那么只能等25ms超时
+
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+1. 场景:
+    连发n个包后收到n/4的ack 在sldt中还需要更新alarm吗? 更 因为ack的到来更新了rtt rtt更准确 所以更新pto/alarm
+    此时很快又来了一个n/3的ack 在sldt中更新pto/alarm 因为更加准确 如果更新后alarm比下一轮定时器 直接过期了 可能吗?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+packer
+1.
+ stream 弹出 Frame可调对象 Frame_CB
+ framer 收集 Frame_CB集 frames 封装成payload {}
+    payload {
+      frames
+      ack       !!!!!! elicting的关键
+      len
+    }
+
+2.
+ 构造packetContents {
+    header
+    ack       !!!!!! elicting的关键
+    frames
+    len
+ }
+ 以及加密后的raw_buffer
+
+3.
+ 构造packedpacket {
+     raw_buffer  密文
+     packetContest 明文结构
+ }
+ 密文raw_buffer用于发送
+ 明文结构用于sendhandler 构造重传队列
+ 
+
+//////////////////////////////////////////////////////////
+quic_session.cc:319       sent packet num: 30
+quic_session.cc:170       recv packet num: 75
+quic_session.cc:339       maybeResetTimer: now: 1650619966806765, deadline: 1650619966836765, ack_alarm: 1650619966831736
+quic_session.cc:401       call onLossDetectionTimeout timeout: 1650619968812279 < now: 1650619968813090
+quic_session.cc:257       1650619966802635, send ack: AckFrame size: 6, largest_ack: 56, delay: 78, block_count: 1: [56: 1], 
+quic_session.cc:122       recv ack: AckFrame size: 6, largest_ack: 60, delay: 188, block_count: 1: [60: 1], 
+quic_utils.cc:43  receivedAck updateRTT real_rtt: 1012, ack_delay: 188, min_rtt: 199, sample: 824, latest_rtt: 824
+
+quic_packet_sorter.cc:424 sldt phase: 0, last_ack_elicit_time: 1650619966807037, pto/m_alarm: 1650619966809677, [rtt->pto: 2640, pto_count: 0], packet_interval: 40
+quic_packet_sorter.cc:424 sldt phase: 1, last_ack_elicit_time: 1650619966810892, pto/m_alarm: 1650619966812189, [rtt->pto: 1297, pto_count: 0], packet_interval: 43
+quic_packet_sorter.cc:498 detectLostPackets: packet 151 lost!, reason: 1, will retrans!!!
+
+//////////////////////////////////////////////////////////
+
+
+InitialStreamReceiveWindow 512k  MaxStreamReceiveWindow 6 * (1 << 20)
+InitialConnectionReceiveWindow (1 << 10) * 512 * 1.5  MaxConnectionReceiveWindow 15 * (1 << 20)
+
+
+TODO
+/////////////////////////////////////////////////////////
+1. 上层stream超时
+2. 生命周期管理 stream/session层 主动关读/写
+    receive:
+        cancelRead       // 向对端发送StopSendingFrame 上层读到错误 底层收不到数据 onComplete判断
+        closeRemote      // 假装收到fin 设置final_offset 上层收到eof 底层还可以收数据?
+        closeForShutdown // 仅仅是置位 不向对端发fin  上层读到错误 底层可以收数据(不处理rst帧)
+        rst帧处理         // 置位reset 设置final_offset(只影响上层读) 上层读到错误 底层可以接受数据(重传?)
+        上层消费/底层生成完毕都会进行 onComplete判断
+    
+    send:
+        close            // 置位finish_writing 通知底层取fin帧 上层写则出错
+        cancelWrite      // 置位CancelWrite 低层发送rst帧 onComplete判断 (只有当retrans发完后才会调complete) 上层写则出错
+        closeForShutdown // 仅仅是置位 底层发不出数据 上层写则出错
+    
+    server: [cancelRead] [cancelWrite]  close
+    client: [cancelWrite] cancelWrite cancelRead
+
+    优雅关闭:
+        close后 即使没有收到fin的ack包 也会onComplete 有点暴力 
+            优雅一点cancelWrite 向对端发送rst把当前max_offset告诉对端
+
+    
+3. 关闭 + 重传场景处理
+4. 尾包丢失
+
+
+a) 重传率: 包重传率/字节重传率
+b) 平均时延
+c) 平均速度
+
+
+/////////////////////////////////////////////////////////
+数据的发送依赖于什么?
+1. cong_win 拥塞窗口是通过cong_win/srtt得到理想带宽方式 并通过上次发包时间差决定本次是否发包
+2. send_win 滑动窗口 没什么好说的
+跟深层一点 暂时不考虑滑动窗口 根本是依赖cong_win/srtt 先不考虑srtt 
+其依赖cong_win大小
+
+标准协议栈中包发送是个死循环(tcp_write_xmit) 是暴力的判断inflight跟cwn大小决定是否发送
+而标准协议是有pacing概念的 (为何?)
+
+箱子论/数据缺口论:
+一个管道的容量是N个箱子 那么发送端需要造2N个箱子 才能确保没有数据缺口 2N就是拥塞窗口
+
+1. 首次充满N 然后发送端开始死等ack到来 显然在等ack的过程中有数据缺口 
+---------------------------------------->
+日日日日日日日日日日日日日日日日日日日日
+                                        口
+<----------------------------------------
+数据缺口是cwn造成的(暂时忽略滑动窗口)
+
+2. 从数据充满N 到再次能发送数据经历了RTT/2
+---------------------------------------->
+日
+口口口口口口口口口口口口口口口口口口口口
+<----------------------------------------
+
+3. 第二次充满N 此时与2阶段差RTT/2                  ////////////////此时就不会有数据缺口了
+---------------------------------------->
+日日日日日日日日日日日日日日日日日日日日
+口
+<----------------------------------------
+
+4. 
+---------------------------------------->
+日日日日日日日日日日日日日日日日日日日日
+口口口口口口口口口口口口口口口口口口口口
+<----------------------------------------
+
+
+/////////////////////////////////////////////////////////
+BBR
+A_0点: 特点是这个点没有在途包
+
+
+---------------------------------------->
+目日日日日日日日日日日日日日日日日日日日
+口口口口口口口口口口口口口口口口口口口口
+<----------------------------------------
+
+轮:         收包 - 发包[p1 p2 ... p8]
+当前轮:     收包[ack1 ack2 ... ack8] - 发包[目] 
+
+发包时 记录最新ack对应的发包时的时间
+
+发送'目'时:
+    记录当前已发总字节数  当前时间 
+    以及当前轮收到的最新的ack(ack8)对应的发包时间(即p8 上一轮) 以及当
+
+
+---------------------------------------->
+                                       
+目
+<----------------------------------------
+
+下一轮:     收包[目ack] - 发包
+
+收到'目'ack时:
+    用lap三剑客恢复到发该包时的上下文
+    计算带宽:      
+        acked累积总字节数 - 发'目'时acked累积的总字节数
+        -----------------------------------------------
+        当前时间 - 收到ack8时的时间
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

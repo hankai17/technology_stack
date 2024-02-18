@@ -1,0 +1,17 @@
+#!/usr/bin/bpftrace
+  
+uprobe:/root/a.out:fun2
+{
+@start[comm,tid] = nsecs;
+}
+
+uretprobe:/root/a.out:fun2
+/@start[comm,tid]/
+{
+ $duration_us = (nsecs - @start[comm,tid]) / 1000;
+ if ($duration_us >100) {
+    printf("func2 cost too long:%d\n",$duration_us);
+ }else {
+    printf("func2 cost normal:%d ret:%d\n",$duration_us,retval);
+ }
+}

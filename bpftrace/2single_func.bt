@@ -1,0 +1,89 @@
+tracepoint:raw_syscalls:sys_enter { @[pid,comm] = count(); }
+//其中count()是统计次数方法，@[]为关联数组，comm为进程名称
+
+//tracepoint:syscalls:sys_enter_execve { printf("%s-->%s\n",comm,str(args->filename));}
+
+//tracepoint:syscalls:sys_enter_open { printf("%s %s\n", comm, str(args->filename)); }
+
+//bpftrace -l 'uprobe:/root/a.out:*'
+
+
+// 内置变量表
+//uid:用户id。
+//tid：线程id
+//pid：进程id。
+//cpu：cpu id。
+//cgroup：cgroup id.
+//probe：当前的trace点。
+//comm：进程名字。
+//nsecs：纳秒级别的时间戳。
+//kstack：内核栈描述
+//curtask：当前进程的task_struct地址。
+//args:获取该kprobe或者tracepoint的参数列表
+//arg0:获取该kprobe的第一个变量，tracepoint不可用
+//arg1:获取该kprobe的第二个变量，tracepoint不可用
+//arg2:获取该kprobe的第三个变量，tracepoint不可用
+//retval: kretprobe中获取函数返回值
+//args->ret: kretprobe中获取函数返回值
+//BEGIN ：bpftrace开始
+//END： bpftrace 结束
+
+
+// 探针类型表
+//Alias   Type    Description
+//t   tracepoint  Kernel static instrumentation points
+//U   usdt    User-level statically defined tracing
+//k   kprobe  Kernel dynamic function instrumentation (standard)
+//kr  kretprobe   Kernel dynamic function return instrumentation (standard)
+//f   kfunc   Kernel dynamic function instrumentation (BPF based)
+//fr  kretfunc    Kernel dynamic function return instrumentation (BPF based)
+//u   uprobe  User-level dynamic function instrumentation
+//ur  uretprobe   User-level dynamic function return instrumentation
+//s   software    Kernel software-based events
+//h   hardware    Hardware counter-based instrumentation
+//w   watchpoint  Memory watchpoint events
+//p   profile Timed sampling across all CPUs
+//i   interval    Timed reporting (from one CPU)
+//iter    Iterator tracing over kernel objects
+//BEGIN   Start of bpftrace
+//END End of bpftrace
+
+// 内置函数
+//Function    Description
+//printf("...")   Print formatted string
+//time("...") Print formatted time
+//join(char *arr[])   Join array of strings with a space
+//str(char *s [, int length]) Return string from s pointer
+//buf(void *p [, int length]) Return a hexadecimal string from p pointer
+//strncmp(char *s1, char *s2, int length) Compares two strings up to length
+//sizeof(expression)  Returns the size of the expression
+//kstack([limit]) Kernel stack trace up to limit frames
+//ustack([limit]) User-level stack trace up to limit frames
+//ksym(void *p)   Resolve kernel address to symbol
+//usym(void *p)   Resolve user-space address to symbol
+//kaddr(char *name)   Resolve kernel symbol name to address
+//uaddr(char *name)   Resolve user-space symbol name to address
+//ntop([int af,]int|char[4:16] addr)  Convert IP address data to text
+//reg(char *name) Return register value
+//cgroupid(char *path)    Return cgroupid for /sys/fs/cgroup/... path
+//time("...") Print formatted time
+//system("...")   Run shell command
+//cat(char *filename) Print file content
+//signal(char[] sig | int sig)    Send a signal to the current task
+//override(u64 rc)    Override a kernel function return value
+//exit()  Exits bpftrace
+//@ = count() Count events
+//@ = sum(x)  Sum the value
+//@ = hist(x) Power-of-2 histogram for x
+//@ = lhist(x, min, max, step)    Linear histogram for x
+//@ = min(x)  Record the minimum value seen
+//@ = max(x)  Record the maximum value seen
+//@ = stats(x)    Return the count, average, and total for this value
+//delete(@x[key]) Delete the map element
+//clear(@x)   Delete all keys from the map
+
+
+//bpftrace 语法简单介绍： [bpftrace Cheat Sheet (brendangregg.com)](https://www.brendangregg.com/BPF/bpftrace-cheat-sheet.html)
+
+//bpftrace 做的后门 [进攻性 BPF：使用 bpftrace 托管后门 ·拥抱红色 (embracethered.com)](https://embracethered.com/blog/posts/2021/offensive-bpf-bpftrace-message-based/)
+

@@ -1,0 +1,7 @@
+BEGIN{
+    printf("Hello, World!\n");
+}
+
+END{
+    printf("Bye, World!\n");
+}

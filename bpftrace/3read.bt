@@ -1,0 +1,17 @@
+#!/usr/bin/bpftrace
+
+
+kprobe:vfs_read                                     // kprobe说明插桩为内核动态函数插桩
+{
+    @start[tid] = nsecs;                            // 定义start为映射表变量 来保存bpftrace临时数据 也会在程序结束时自动输出 @start的映射表为map类型 key为tid
+}
+
+kretprobe:vfs_read
+/@start[tid]/                                       // 行为匹配条件 即要存在这个线程的进入read函数的开始时间戳 不然这个值为0
+{
+    $duration_us = (nsecs - @start[tid]) / 1000;
+    //@us = hist($duration_us);                     // 定义一个名字为@us的映射表变量 保存的是耗时时间为值的2的幂次方的直方图 hist为生成直方图的内置函数
+    @us[tid, comm] = hist($duration_us);
+    delete(@start[tid]);
+}
+

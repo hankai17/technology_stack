@@ -1,0 +1,101 @@
+#!/usr/local/bin/bpftrace
+/*
+ * tcpaccept-tp - Trace TCP passive connections (accept()) using tracepoints.
+ *
+ * See BPF Performance Tools, Chapter 10, for an explanation of this tool.
+ *
+ * Copyright (c) 2019 Brendan Gregg.
+ * Licensed under the Apache License, Version 2.0 (the "License").
+ * This was originally created for the BPF Performance Tools book
+ * published by Addison Wesley. ISBN-13: 9780136554820
+ * When copying or porting, include this comment.
+ *
+ * 07-Apr-2019  Brendan Gregg   Created this.
+ */
+
+#include <net/tcp_states.h>
+#include <linux/socket.h>
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/in.h>
+#include <linux/netdevice.h>
+#include <net/ip_fib.h>
+#include <net/sock.h>
+#include <net/route.h>
+#include <linux/mroute.h>
+
+// bpftrace -l | grep xxx
+
+BEGIN
+{
+	printf("%-8s %-3s %-14s %-5s %-14s %-5s\n", "TIME", "IP",
+	    "RADDR", "RPORT", "LADDR", "LPORT");
+}
+
+kprobe:inet_bind
+{
+    $socket = (struct socket *)arg0;
+    $sa = (struct sockaddr *)arg1;
+    $sock = (struct sock *)$socket->sk;
+    $net = $sock->__sk_common.skc_net.net;
+    $if = $sock->__sk_common.skc_bound_dev_if;
+    printf("socket: %p, sock: %p, net: %p, if: %d\n", $socket, $sock, $net, $if);
+    printf("socket: %s, sock: %s, net: %s\n", ksym($socket), ksym($sock), ksym($net));
+
+    @start[tid] = nsecs;
+
+    if ($sa->sa_family == AF_INET) {
+       $s = (struct sockaddr_in *) arg1;
+       $port = ($s->sin_port>>8) | (($s->sin_port<<8) &0xff00);
+       printf("%-16s %-5d  \n",ntop(AF_INET,$s->sin_addr.s_addr),$port);
+    }
+}
+
+kprobe:__inet_bind
+/@start[tid]/
+{
+    $sock = (struct sock *)arg0;
+    printf("__inet_bind: sock: %p\n", $sock);
+    printf("__inet_bind: sock: %s\n", ksym($sock));
+}
+
+kprobe:inet_csk_get_port
+/@start[tid]/
+{
+    printf("%s\n", kstack);
+    $sock = (struct sock *)arg0;
+    $prot = $sock->__sk_common.skc_prot;
+    $hinfo = $prot->h.hashinfo;
+    //$net = sock_net($sock);
+    $net = $sock->__sk_common.skc_net.net;
+    $if = $sock->__sk_common.skc_bound_dev_if;
+
+    printf("sock: %p, hashinfo: %p, net: %p, port: %ld, if: %d\n", 
+            $sock, $hinfo, $net, arg1, $if);
+}
+
+kprobe:inet_csk_bind_conflict
+/@start[tid]/
+{
+    $sock = (struct sock *)arg0;
+    $if = $sock->__sk_common.skc_bound_dev_if;
+    $inet_sk = (struct inet_sock *)$sock;
+    //$in6addr = $inet_sk->rcv_saddr;
+    printf("inet_csk_bind_conflict: if: %d\n", $if);
+
+}
+
+kprobe:inet_rcv_saddr_equal
+/@start[tid]/
+{
+    $sock = (struct sock *)arg0;
+    $sock2 = (struct sock *)arg1;
+    $addr = $sock->__sk_common.skc_rcv_saddr;
+    $addr2 = $sock2->__sk_common.skc_rcv_saddr;
+    if ($addr == 0) {
+        printf("inet_rcv_saddr_equal: addr is 0\n"); 
+    } else if ($addr == $addr2) {
+        printf("inet_rcv_saddr_equal: addr == addr2\n");
+    }
+}
+

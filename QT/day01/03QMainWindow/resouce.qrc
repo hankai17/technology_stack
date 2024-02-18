@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/acb">
+        <file>Image/face.png</file>
+        <file>Image/heart.png</file>
+    </qresource>
+</RCC>

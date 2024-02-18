@@ -1,0 +1,88 @@
+//可变模板参数展开 是c++向cXX本质的飞跃
+//常见的可变参数模板
+template<class... T>  //...即声明一个参数包 包中可以包含任意个模板参数
+void f(T... args) {
+	cout<< sizeof... (args) <<endl;
+}
+
+f(); //0
+f(1, 2); //2
+f(1, 2.5, ""); //3
+
+如果要用参数包中的参数 即展开参数包 
+一种方法是通过递归模板函数展开包
+//首先得提供展开函数+递归终止函数
+void print() { //终止函数
+	cout<<"empty"<<endl;
+}
+template<class T, class... Args> //参数包Args...在展开过程中递归的调用自己 每调一次参数少一个
+void print(T head, Args... rest) {
+	cout<<"para" << head <<endl;
+	print(rest...);
+}
+
+int main() {
+	print(1, 2, 3, 4);
+}
+
+
+
+
+
+
+
+
+
+#include <iostream>
+
+template <typename T>
+void Print(T t) {
+  std::cout << t << std::endl;
+}
+
+template <typename T1, typename T2>
+void Print(T1 t1, T2 t2) {
+  std::cout << t1 << t2 << std::endl;
+}
+
+template <typename T1, typename T2, typename T3>
+void Print(T1 t1, T2 t2, T3 t3) {
+  std::cout << t1 << t2 << t3 << std::endl;
+}
+
+template <typename T1, typename T2, typename T3, typename T4>
+void Print(T1 t1, T2 t2, T3 t3, T4 t4) {
+  std::cout << t1 << t2 << t3 << t4 << std::endl;
+}
+
+template <typename T1, typename T2, typename T3, typename T4, typename T5>
+void Print(T1 t1, T2 t2, T3 t3, T4 t4, T5 t5) {
+  std::cout << t1 << t2 << t3 << t4 << t5 << std::endl;
+}
+
+template<typename T> //展开包的2要素
+void Print1(T t) {
+	std::cout<<t<<std::endl;
+}
+template<typename T, typename... Args>
+void Print1(T t, Args... args) {
+	std::cout<<t;
+	Print1(args...);
+}
+
+int main(void)
+{
+  Print(1);
+  Print(1, 2);
+  Print1(1, 2, 3);
+  Print(1, 2, 3, 4);
+  Print1(1, 2, 3, 4, 5);
+
+  return 0;
+}
+
+
+一种是通过逗号表达式展开包
+//递归好理解 缺点是得写一个重载的递归终止函数
+...... 
+看不下去了
