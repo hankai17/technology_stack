@@ -92,12 +92,14 @@ public:
   virtual void
   Tick(double now)
   {
-    if (i_am_in_nodes() && !other_nodes_.empty() && now - last_heartbeat_ > election_timeout_ + random_election_delay_) {
+    if (i_am_in_nodes() && !other_nodes_.empty() && 
+        now - last_heartbeat_ > election_timeout_ + 
+        random_election_delay_) {                   // 如果已经很久没有收到leader的心跳了 那么就开始选举
       double r = 0.0;
       drand48_r(&rand_, &r);
       random_election_delay_ = election_timeout_ * r;
       last_heartbeat_        = now;
-      VoteForMe();
+      VoteForMe();                                  // 当前节点变成候选人 选举自己
       return;
     }
     // Send heartbeats at 1/4 of timeout to allow for lost
@@ -127,10 +129,11 @@ public:
   {
     if (m.term() >= term_)
       seen_term_ = true;
-    if (m.term() < term_)
-      return; // Ignore messages from terms gone by.
-    if (m.term() > term_)
-      NewTerm(m.term(), m.leader(), false);
+    if (m.term() < term_)           // 不处理老消息 // Ignore messages from terms gone by.
+      return;
+    if (m.term() > term_)           // 如果有节点开启了新一轮term // a) 可能是个投票比如1) leader是空的 b) 可能已经选举好了 leader非空
+      NewTerm(m.term(), m.leader(), //   则重置本节点"三剑客"
+        false);
     if (m.leader() != "" && leader_ != m.leader() && other_nodes_.count(m.from())) { // Only from nodes I acknowledge.
       leader_ = m.leader();
       server_->LeaderChange(this, leader_);
@@ -146,7 +149,7 @@ public:
     if (m.from() != leader_ || m.has_vote()) {
       HandleAck(now, m, &n);
       if (m.has_vote())
-        HandleVote(m, &n);
+        HandleVote(m, &n);          // 不满足投票条件 则不响应?
       return;
     }
     last_heartbeat_ = now;
@@ -219,7 +222,9 @@ private:
   }
 
   void
-  NewTerm(int64_t term, const ::std::string new_leader, bool in_recovery)
+  NewTerm(int64_t term, 
+    const ::std::string new_leader, 
+    bool in_recovery)                   // 一旦收到新任期 那么就强制重置"三剑客"
   {
     vote_   = "";
     term_   = term;
@@ -227,17 +232,18 @@ private:
     waiting_commits_.clear();
     if (!in_recovery) {
       WriteInternalLogEntry();
-      server_->LeaderChange(this, leader_);
+      server_->LeaderChange(this, 
+        leader_);
     }
   }
 
   void
-  VoteForMe()
+  VoteForMe()                           // 发起投票
   {
     if (seen_term_ || leader_ != "" || vote_ != node_) {
       vote_ = node_;
       term_++;
-      leader_ = "";
+      leader_ = "";                     // 注意: 发起投票时 msg里的leader是空的
       waiting_commits_.clear();
       WriteInternalLogEntry();
       server_->LeaderChange(this, leader_);
@@ -247,13 +253,13 @@ private:
   }
 
   void
-  Vote()
+  Vote()                                // 两层意思: 1)发起投票 2)响应投票
   {
-    Message m(InitializeMessage());
-    m.set_vote(vote_);
-    if (vote_ == node_)
+    Message m(InitializeMessage());     // 构造本节点元数据
+    m.set_vote(vote_);                  // 重置 候选人
+    if (vote_ == node_)                 // 1)如果候选人是本节点 那么把消息发给其它节点 // eg: 本节点最先发现leader挂了
       SendToReplicas(m);
-    else
+    else                                // 2)如果候选人不是本节点 那么把消息发给候选人 // eg: 候选人已经给本节点发送投票消息了 本节点发送投票给候选人
       server_->SendMessage(this, vote_, m);
   }
 
@@ -261,19 +267,23 @@ private:
   HandleVote(const Message &m, NodeState *n)
   {
     n->vote = m.vote();
-    if (vote_.empty()) {       // I have not voted yet.
-      if (m.vote() == node_) { // Abdication.
+    if (vote_.empty()) {                // 本节点没有投过票
+      if (m.vote() == node_) {          // 投票是给本节点的 // 退位?    
         VoteForMe();
-      } else if (m.last_log_term() >= last_log_term_ && m.last_log_index() >= index_) {
-        // Vote for candidate if it is at least as up to date as we are.
-        vote_ = m.vote();
+      } else if (m.last_log_term() >= last_log_term_ && 
+        m.last_log_index() >= index_) { // 即要求投票给候选人/发送这个消息的人 且 
+                                        // 候选人最新日志条目对应的任期号至少比本节点新 且
+                                        // 候选人最新日志条目的索引值(槽位) 至少比本节点新
+                                        // Vote for candidate if it is at least as up to date as we are
+        vote_ = m.vote();               // 获取候选人/发送这个消息的人 重置本节点候选人
         WriteInternalLogEntry();
-        Vote();
+        Vote();                         // 投票给候选人
       }
-    } else if (vote_ == node_ && node_ == n->vote) {
+    } else if (vote_ == node_ 
+      && node_ == n->vote) {            // 本节点投过票 且是投给自己的
       int votes = 0;
       for (auto &o : other_config_nodes_) {
-        auto &s = node_state_[o];
+        auto &s = node_state_[o];       // 统计本节点被投票的次数是否满足当leader
         if (s.term == term_ && s.vote == node_)
           votes++;
       }
