@@ -41,7 +41,7 @@ sub main {
 	# silent implies quiet
 	$quiet = 1 if $silent;
 
-	while (<>) {
+	while (<>) {    #<>以@ARGV为默认参数 #<>将后面的参数按空格区分为文件名，一个个进行打开操作
 		chomp;
 		push @input, $_;
 	}

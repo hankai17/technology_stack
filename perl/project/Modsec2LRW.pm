@@ -226,12 +226,12 @@ sub valid_line {
 	return any { $line =~ m/^$_ / } @valid_directives;
 }
 
-sub clean_input {
+sub clean_input {  #最终返回一个array 里面每个元素代表一条规则
 	my (@input) = @_;
 
 	my (@lines, @line_buf);
 
-	for my $line (@input) {
+	for my $line (@input) {     # 首先这里面没有换行符
 		# ignore comments and blank lines
 		next if ! $line;
 		next if $line =~ m/^\s*$/;
@@ -253,7 +253,7 @@ sub clean_input {
 		#   expirevar:tx.foo=60"
 		#
 		# strip the multi-line ecape and surrounding whitespace
-		if ($line =~ s/\s*\\\s*$//) {
+		if ($line =~ s/\s*\\\s*$//) { #把反斜杠删掉
 			push @line_buf, $line;
 		} else {
 			# either the end of a multi line directive or a standalone line
@@ -271,7 +271,7 @@ sub clean_input {
 }
 
 # take a line and return an array of tokens representing various rule parts
-sub tokenize {
+sub tokenize {      #hankai1 token化
 	my ($line) = @_;
 
 	my @tokens;
@@ -281,23 +281,34 @@ sub tokenize {
 	# - tokens are whitespace separated
 	# - tokens must be quoted with " if they contain spaces
 	# - " chars within quoted tokens must be escaped with \
-	my $re_quoted   = qr/^"((?:[^"\\]+|\\.)*)"/;
+	my $re_quoted   = qr/^"((?:[^"\\]+|\\.)*)"/; #可引用的正则
 	my $re_unquoted = qr/([^\s]+)/;
+    #print "re_quoted: ", $re_quoted, "\n";      # (?^:^"((?:[^"\\]+|\\.)*)")
+    #print "re_unquoted: ", $re_unquoted, "\n";  # (?^:([^\s]+))
 
 	# walk the given string and grab the next token
 	# which may be either quoted or unquoted
 	# from there, push the token to our list of fields
 	# and strip it from the input line
 	while ($line =~ $re_quoted || $line =~ $re_unquoted) {
+        #print "line matched! ", $line, "\n";
+        print "1: ", $1, "\n";
 		my $token = $1;
 		$line =~ s/"?\Q$token\E"?//;
+        print "line1: ", $line, "\n";
 		$line =~ s/^\s*//;
+        print "line2: ", $line, "\n";
 
 		# remove any escaping backslashes from escaped quotes
 		# e.g. "foo \" bar" becomes literal 'foo " bar'
 		$token =~ s/\\"/"/g;
+        #print "token: ", $token, "\n";
 		push @tokens, $token;
 	}
+    print "\n";
+    print join "\n ", map { $_ } @tokens;
+    print "\n";
+    exit(0);
 
 	return @tokens;
 }
