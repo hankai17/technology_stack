@@ -281,8 +281,12 @@ sub tokenize {      #hankai1 token化
 	# - tokens are whitespace separated
 	# - tokens must be quoted with " if they contain spaces
 	# - " chars within quoted tokens must be escaped with \
-	my $re_quoted   = qr/^"((?:[^"\\]+|\\.)*)"/; #可引用的正则
-	my $re_unquoted = qr/([^\s]+)/;
+	my $re_quoted   = qr/^"((?:[^"\\]+|\\.)*)"/;    #从"开始匹配 
+	#my $re_quoted   = qr/^"(([^"\\]+|\\.)*)"/;    #从"开始匹配 
+                                                    #   a)直到匹配到"或者\ 
+                                                    #   b)直到匹配到\跟一个任意字符
+                                                    #最后再匹配一个"  #即匹配""中的内容 包括转义
+	my $re_unquoted = qr/([^\s]+)/;                 #匹配非空格字串
     #print "re_quoted: ", $re_quoted, "\n";      # (?^:^"((?:[^"\\]+|\\.)*)")
     #print "re_unquoted: ", $re_unquoted, "\n";  # (?^:([^\s]+))
 
@@ -290,14 +294,14 @@ sub tokenize {      #hankai1 token化
 	# which may be either quoted or unquoted
 	# from there, push the token to our list of fields
 	# and strip it from the input line
-	while ($line =~ $re_quoted || $line =~ $re_unquoted) {
-        #print "line matched! ", $line, "\n";
-        print "1: ", $1, "\n";
-		my $token = $1;
+	while ($line =~ $re_quoted || $line =~ $re_unquoted) { #要么是引号里面的内容 要么是单独的一个字串
+        print "\$1: ", $1, "\n";
+		my $token = $1;                             #以数字为名的变量保存的是上一次匹配操作（/pattern/中 第n个小括号中的原符号所匹配内容 
+                                                    #$1就是第一对小括号中的原符号所对应的匹配内容 $2就是第二对小括号中的原符号所对应的匹配内容
 		$line =~ s/"?\Q$token\E"?//;
-        print "line1: ", $line, "\n";
+        #print "line1: ", $line, "\n";
 		$line =~ s/^\s*//;
-        print "line2: ", $line, "\n";
+        #print "line2: ", $line, "\n";
 
 		# remove any escaping backslashes from escaped quotes
 		# e.g. "foo \" bar" becomes literal 'foo " bar'

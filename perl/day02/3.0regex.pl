@@ -1,7 +1,9 @@
 #match
 my $string = "Hello world";
-if ($string =~ m/(\w+)\s+(\w+)/) { #=~ m//运算符进行正则表达式匹配
+#if ($string =~ m/(\w+)\s+(\w+)/) { #=~ m//运算符进行正则表达式匹配
+if ($string =~ m/^$_/) {
 	print "success";
+    print $string;
 }
 print $1; #匹配成功以后，匹配组被填入内置变量$1、$2、$3……：
 print $2;
