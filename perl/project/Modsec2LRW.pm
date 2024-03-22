@@ -226,12 +226,12 @@ sub valid_line {
 	return any { $line =~ m/^$_ / } @valid_directives;
 }
 
-sub clean_input {  #最终返回一个array 里面每个元素代表一条规则
+sub clean_input {                       #hankai0 最终返回一个array 里面每个元素代表一条规则
 	my (@input) = @_;
 
 	my (@lines, @line_buf);
 
-	for my $line (@input) {     # 首先这里面没有换行符
+	for my $line (@input) {             # 首先line字串里没有换行符
 		# ignore comments and blank lines
 		next if ! $line;
 		next if $line =~ m/^\s*$/;
@@ -253,7 +253,7 @@ sub clean_input {  #最终返回一个array 里面每个元素代表一条规则
 		#   expirevar:tx.foo=60"
 		#
 		# strip the multi-line ecape and surrounding whitespace
-		if ($line =~ s/\s*\\\s*$//) { #把反斜杠删掉
+		if ($line =~ s/\s*\\\s*$//) {   #把反斜杠删掉
 			push @line_buf, $line;
 		} else {
 			# either the end of a multi line directive or a standalone line
@@ -271,7 +271,12 @@ sub clean_input {  #最终返回一个array 里面每个元素代表一条规则
 }
 
 # take a line and return an array of tokens representing various rule parts
-sub tokenize {      #hankai1 token化
+sub tokenize {                                      #hankai1 token化 #一般把本条规则会拆出来(如下)四部分(并去掉引号) 放到tokens数组里 
+    #SecRule
+    #REQUEST_FILENAME
+    #@endsWith /block/add
+    #id:9001206, phase:2, pass, nolog, ctl:ruleRemoveTargetByTag=OWASP_CRS;ARGS:body[0][value], ver:'OWASP_CRS/3.2.0'
+
 	my ($line) = @_;
 
 	my @tokens;
@@ -282,52 +287,52 @@ sub tokenize {      #hankai1 token化
 	# - tokens must be quoted with " if they contain spaces
 	# - " chars within quoted tokens must be escaped with \
 	my $re_quoted   = qr/^"((?:[^"\\]+|\\.)*)"/;    #从"开始匹配 
-	#my $re_quoted   = qr/^"(([^"\\]+|\\.)*)"/;    #从"开始匹配 
+	#my $re_quoted   = qr/^"(([^"\\]+|\\.)*)"/;     #从"开始匹配 
                                                     #   a)直到匹配到"或者\ 
                                                     #   b)直到匹配到\跟一个任意字符
                                                     #最后再匹配一个"  #即匹配""中的内容 包括转义
 	my $re_unquoted = qr/([^\s]+)/;                 #匹配非空格字串
-    #print "re_quoted: ", $re_quoted, "\n";      # (?^:^"((?:[^"\\]+|\\.)*)")
-    #print "re_unquoted: ", $re_unquoted, "\n";  # (?^:([^\s]+))
+    #print "re_quoted: ", $re_quoted, "\n";         # (?^:^"((?:[^"\\]+|\\.)*)")
+    #print "re_unquoted: ", $re_unquoted, "\n";     # (?^:([^\s]+))
 
 	# walk the given string and grab the next token
 	# which may be either quoted or unquoted
 	# from there, push the token to our list of fields
 	# and strip it from the input line
 	while ($line =~ $re_quoted || $line =~ $re_unquoted) { #要么是引号里面的内容 要么是单独的一个字串
-        print "\$1: ", $1, "\n";
+        #print "\$1: ", $1, "\n";
+        #print "line: ", $line, "\n";               #不修改原始的字串
 		my $token = $1;                             #以数字为名的变量保存的是上一次匹配操作（/pattern/中 第n个小括号中的原符号所匹配内容 
                                                     #$1就是第一对小括号中的原符号所对应的匹配内容 $2就是第二对小括号中的原符号所对应的匹配内容
-		$line =~ s/"?\Q$token\E"?//;
+		$line =~ s/"?\Q$token\E"?//;                #从原始串中找到token 然后用空格代替之
         #print "line1: ", $line, "\n";
-		$line =~ s/^\s*//;
+		$line =~ s/^\s*//;                          #移除最前面的空格
         #print "line2: ", $line, "\n";
 
 		# remove any escaping backslashes from escaped quotes
 		# e.g. "foo \" bar" becomes literal 'foo " bar'
-		$token =~ s/\\"/"/g;
+		$token =~ s/\\"/"/g;                        #把token里的 \" 换为 "
         #print "token: ", $token, "\n";
 		push @tokens, $token;
 	}
     print "\n";
     print join "\n ", map { $_ } @tokens;
     print "\n";
-    exit(0);
-
+    #exit(0);
 	return @tokens;
 }
 
 # take an array of rule parts and return a hashref of parsed tokens
-sub parse_tokens {
+sub parse_tokens {                                  #hankai2 tokens是一个数组 一般包含4个部分(directive + voa 参考hankai1)
 	my (@tokens) = @_;
 
 	my ($entry, $directive, $vars, $operator, $actions);
 	$entry = {};
 
 	# save this for later debugging / warning
-	$entry->{original}  = join ' ', @tokens;
+	$entry->{original}  = join ' ', @tokens;        #记录原始规则串
 
-	$directive = shift @tokens;
+	$directive = shift @tokens;                     #初始化voa
 	if ($directive eq 'SecRule') {
 		$vars     = shift @tokens;
 		$operator = shift @tokens;
@@ -341,14 +346,23 @@ sub parse_tokens {
 	$entry->{operator}  = parse_operator($operator) if $operator;
 	$entry->{actions}   = parse_actions($actions) if $actions;
 
-	return $entry;
+	return $entry;                                  #该条规则 解析到VOA中
 }
 
-sub parse_vars {
-	my ($raw_vars) = @_;
+sub parse_vars {                                    #hankai2.1
+	my ($raw_vars) = @_;                            #获取裸串
+    #print $raw_vars, "\n";
+    #REQUEST_FILENAME
+    #ARGS:destination
+    #REQUEST_HEADERS:Content-Type
+    #REQUEST_COOKIES:/S?SESS[a-f0-9]+/
+    #REQUEST_HEADERS:Content-Length|REQUEST_HEADERS:Transfer-Encoding
+    #ARGS:/(foo|bar)/ 
+    #ARGS:'/(foo|bar)/'
+    #ARGS:/(foo|bar)/|ARGS:'/(foo|bar)/'
 
 	my (@tokens, @parsed_vars, @var_buf, $sentinal);
-	my @split_vars = split /\|/, $raw_vars;
+	my @split_vars = split /\|/, $raw_vars;         #|暴力分割
 
 	# XXX
 	# vars may take one of a few forms
@@ -383,8 +397,8 @@ sub parse_vars {
 		#
 		# - we could have split but we know we're done
 		# (we know this if the last member of the chunk is /'?
-		$sentinal = 1 if (($chunk !~ m/(?:\/'?|'?\/)/ || $chunk !~ m/:/)
-			&& ! (scalar @var_buf > 1 && $var_buf[0] =~ m/(?:\/'?|'?\/)/))
+		$sentinal = 1 if (($chunk !~ m/(?:\/'?|'?\/)/ || $chunk !~ m/:/) &&     #如果chunk中不包含: 或 看不懂
+            ! (scalar @var_buf > 1 && $var_buf[0] =~ m/(?:\/'?|'?\/)/))
 			|| $chunk =~ m/\/'?$/;
 
 		if ($sentinal) {
@@ -392,9 +406,10 @@ sub parse_vars {
 			@var_buf  = ();
 			$sentinal = 0;
 		}
-	}
+	}                                                                           #最终结果是 把v都拆出来 放到tokens数组里
 
-	for my $token (@tokens) {
+    # [ARGS:/(foo|bar)/] [ARGS:'/(foo|bar)/']
+	for my $token (@tokens) {                                                   #遍历 捕获的变量 们
 		# variables may take a few forms
 		# ! and & are optional metacharacters (mutually exclusive)
 		# an optional ':foo' element may also exist
@@ -406,18 +421,20 @@ sub parse_vars {
 		my $parsed = {};
 
 		# if we see a modifier, strip it from the var
-		# and populate its own field
+		# and populate its own field                                            # &REQUEST_HEADERS_NAMES:Referer 
+                                                                                # !ARGS:/^(?i:ref(erer)?)$/
 		if ($var =~ m/^[&!]/) {
 			$modifier = substr $var, 0, 1, '';
-			$parsed->{modifier} = $modifier;
+			$parsed->{modifier} = $modifier;                                    #modifier要么是& 要么是!
 		}
 
 		# pop the last var off the stack to add our ignore
-		if (defined $modifier && $modifier eq '!') {
+                                                                                #ARGS_POST|REQUEST_COOKIES|!REQUEST_COOKIES:/__utm/|REQUEST_COOKIES_NAMES|REQUEST_HEADERS|!REQUEST_HEADERS:/Cookie/|XML:/*
+		if (defined $modifier && $modifier eq '!') {                            #如果变量前面有!
 			my $prev_parsed_var = pop @parsed_vars;
 
 			if (!$prev_parsed_var) {
-				warn "No previous var\n";
+				warn "No previous var\n";                                       #!REQUEST_COOKIES:/__utm/|ARGS_NAMES|ARGS|XML:/*     这种写法不允许?
 				next;
 			}
 
@@ -427,7 +444,7 @@ sub parse_vars {
 				next;
 			}
 
-			push @{$prev_parsed_var->{ignore}}, $specific;
+			push @{$prev_parsed_var->{ignore}}, $specific;                      # 与前面相同的合并 并添加一个ignore字段
 			$parsed = $prev_parsed_var;
 			$parsed->{modifier} = '!';
 			push @parsed_vars, $parsed;
@@ -437,13 +454,13 @@ sub parse_vars {
 		$parsed->{variable} = $var;
 		$parsed->{specific} = $specific;
 
-		push @parsed_vars, $parsed;
+		push @parsed_vars, $parsed;                                             #将这个变量拆出来三部分 放到parsed里
 	}
 
 	return \@parsed_vars;
 }
 
-sub parse_operator {
+sub parse_operator {                                                            #hankai2.2
 	my ($raw_operator) = @_;
 
 	# operators may be defined by the @ symbol
@@ -459,7 +476,7 @@ sub parse_operator {
 	# note that some operators (i'm looking at you, libinjection wrapper)
 	# do not require a pattern, so we need to account for such cases
 	my ($negated, $operator, $pattern) = $raw_operator =~ m/^\s*(?:(\!)?(?:\@([a-zA-Z]+)\s*)?)?(.*)$/;
-	$operator ||= 'rx';
+	$operator ||= 'rx';                                                         #o 默认为rx
 
 	my $parsed = {};
 
@@ -470,11 +487,11 @@ sub parse_operator {
 	return $parsed;
 }
 
-sub parse_actions {
+sub parse_actions {                                                             #hankai 2.3
 	my ($raw_actions) = @_;
 
 	my (@tokens, @parsed_actions, @action_buf, $sentinal);
-	my @split_actions = split ',', $raw_actions;
+	my @split_actions = split ',', $raw_actions;                                #id:9001216, phase:2, pass, nolog, ctl:ruleRemoveTargetByTag=OWASP_CRS;ARGS:feed_description, ver:'OWASP_CRS/3.2.0', msg:'AspcmsV2.5.6, SQL Injection Attack'
 
 	# actions may take one of a few forms
 	# standalone: deny
@@ -489,7 +506,7 @@ sub parse_actions {
 		# once we know we've reached the end of an
 		# action, we'll put the buffer elements
 		# back together and add it to the final array
-		my $chunk = shift @split_actions;
+		my $chunk = shift @split_actions;                                       #从数组中移出来放临时数组
 		push @action_buf, $chunk;
 
 		# we're done chaining together chunks if:
@@ -503,8 +520,10 @@ sub parse_actions {
 		#
 		# - we could have split but we know we're done
 		# (we know this if the last member of the chunk is a ')
-		$sentinal = 1 if (($chunk !~ m/'/ || $chunk !~ m/:/)
-			&& ! (scalar @action_buf > 1 && $action_buf[0] =~ m/'/))
+                                                                                # msg:'AspcmsV2.5.6, SQL Injection Attack'
+                                                                                # ----------------- 这部分已经翻入临时数组
+		$sentinal = 1 if (($chunk !~ m/'/ || $chunk !~ m/:/)                    # 如果刚刚放到临时数组中的chunk 没有'或者: 且 临时数组中最初的元素没有' 则sentinal为1 即可以收割
+			&& ! (scalar @action_buf > 1 && $action_buf[0] =~ m/'/))            # 刚刚放进去的元素是正常的(还要看以前最初的元素是否正常) || 最后一个字符是'
 			|| $chunk =~ m/'$/;
 
 		if ($sentinal) {
@@ -512,13 +531,13 @@ sub parse_actions {
 			@action_buf  = ();
 			$sentinal = 0;
 		}
-	}
+	}                                                                           #action_buf的作用是 "提纯"action
 
 	# great, now that we have proper tokens
 	# we can split any potential key value pairs
 	# and add them to the final array
-	for my $token (@tokens) {
-		my ($action, @value) = split /:/, $token;
+	for my $token (@tokens) {                                                   #tokens数组里是 经过提纯后的action集
+		my ($action, @value) = split /:/, $token;                               #如果是kv类型的action则
 
 		# trim whitespace (this is necessary for multi-line rules)
 		$action =~ s/^\s*|\s*$//g;
@@ -528,7 +547,7 @@ sub parse_actions {
 		$parsed->{action}   = $action;
 		$parsed->{value} = strip_encap_quotes(join ':', @value) if @value;
 
-		push @parsed_actions, $parsed;
+		push @parsed_actions, $parsed;                                          #这里用的是数组存的
 	}
 
 	return \@parsed_actions;
@@ -538,7 +557,8 @@ sub parse_actions {
 sub strip_encap_quotes {
 	my ($line) = @_;
 
-	$line =~ s/^(['"])(.*)\1$/$2/;
+	$line =~ s/^(['"])(.*)\1$/$2/;                                              #萃取单双引号里的内容
+                                                                                #\1即 匹配组1中的内容 即也是单引号或双引号
 
 	return $line;
 }
@@ -550,15 +570,15 @@ sub build_chains {
 	my (@chain, @chains);
 
 	for my $rule (@rules) {
-		push @chain, $rule;
+		push @chain, $rule;                                                     #先将这条规则放到临时数组中
 
 		# figure if this rule is part of a chain
-		next if grep { $_ eq 'chain' } map { $_->{action} } @{$rule->{actions}};
+		next if grep { $_ eq 'chain' } map { $_->{action} } @{$rule->{actions}};#如果这条规则的action中有chain关键字 则continue
 
 		# if the chain action isnt set, we're either a standalone rule
 		# or at the end of a chain; either way, push this chain
 		# to our array of chains and empty the current chain buffer
-		push @chains, [ @chain ];
+		push @chains, [ @chain ];                                               #hankai TODO
 		@chain = ();
 	}
 
@@ -580,7 +600,8 @@ sub translate_chains {
 		body_filter   => [],
 	};
 
-	for my $chain (@chains) {
+	for my $chain (@chains) {                                                   # (rule1, rule2, [rule3.1, rule3.2], rule4)
+                                                                                # chain可能是一个元素 也可能是个匿名数组
 		try {
 			my @translation = translate_chain({
 				chain  => $chain,
@@ -610,7 +631,7 @@ sub translate_chains {
 # due to an imcompatability, die with the incompatible elements
 sub translate_chain {
 	my ($args) = @_;
-	my @chain  = @{$args->{chain}};
+	my @chain  = @{$args->{chain}};                                 # chain可能是个元素 也可能是个匿名数组
 	my $silent = $args->{silent};
 	my $force  = $args->{force};
 	my $path   = $args->{path};
@@ -682,27 +703,31 @@ sub translate_vars {
 
 	# maintain a 1-1 translation of modsec vars to lua-resty-waf vars
 	# this necessitates that a lua-resty-waf rule vars key is an array
-	for my $var (@{$rule->{vars}}) {
+	for my $var (@{$rule->{vars}}) {                                    #参考hankai2.1
 		my $original_var = $var->{variable};
-		my $lookup_var   = clone($valid_vars->{$original_var});
+		my $lookup_var   = clone($valid_vars->{$original_var});         #从字典中查找该变量名 # hankai TODO clone?
+	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ qw(values 1) ] },
 
 		die "Cannot translate variable $original_var" if !$lookup_var && !$force;
 		next if !$lookup_var;
 
 		die "Cannot have a specific attribute when the lookup table already provided one"
 			if ($var->{specific} && grep { $_ eq 'specific' } @{$lookup_var->{parse}});
+                                                                        #如果指定了要捕获的变量中的某个元素  # hankai TODO
+                                                                        # ARGS:/(foo|bar)/|ARGS:'/(foo|bar)/'
+                                                                        # !ARGS:/^(?i:ref(erer)?)$/
 
 		my $translated_var = $lookup_var;
 		my $modifier       = $var->{modifier};
 		my $specific       = $var->{specific};
 
 		my $specific_regex;
-		if ($specific =~ m/^'?\//) {
-			$specific =~ s/^'?\/(.*)\/'?/$1/;
+		if ($specific =~ m/^'?\//) {                                    #如果是'/开头 或者 /开头的字符串
+			$specific =~ s/^'?\/(.*)\/'?/$1/;                           #则去掉这部分 eg: '/(foo|bar)/' 变成了 (foo|bar)
 			$specific_regex = 1;
 		}
 
-		if (defined $modifier && $modifier eq '!') {
+		if (defined $modifier && $modifier eq '!') {                    #如果有! 则说明有ignore字段
 			for my $elt (@{$var->{ignore}}) {
 				my $elt_regex;
 				if ($elt =~ m/^'?\//) {
@@ -710,26 +735,30 @@ sub translate_vars {
 					$elt_regex = 1;
 				}
 
-				my $key = $elt_regex ? 'regex' : 'ignore';
+				my $key = $elt_regex ? 'regex' : 'ignore';              #这里的ignore起的名字不太好 应该起string好一些 表示的是要忽略的字符串
 
-				$elt = uc $elt if $lookup_var->{storage};
+				$elt = uc $elt if $lookup_var->{storage};               #hankai TODO
 
 				push @{$translated_var->{ignore}}, [ ($key, $elt) ];
+	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ qw(values 1) ], ignore => [ regex, (foo|bar) ] },
+	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ qw(values 1) ], ignore => [ regex, (foo|bar) ] [ ignore, '(foo|bar)'] },
 			}
 		} elsif (length $specific) {
-			my $key = $specific_regex ? 'regex' : 'specific';
+			my $key = $specific_regex ? 'regex' : 'specific';           #名字起的不好 同上
 
-			$specific = uc $specific if $lookup_var->{storage};
+			$specific = uc $specific if $lookup_var->{storage};         #hankai TODO
 
 			delete $translated_var->{parse};
 			push @{$translated_var->{parse}}, $key, $specific;
+	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ regex, (foo|bar), specific, '(foo|bar)' ] },
 		}
 
 		if (defined $modifier && $modifier eq '&') {
 			$translated_var->{length} = 1;
 		}
+	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ regex, (foo|bar), specific, '(foo|bar)' ], length => 1 },
 
-		push @{$translation->{vars}}, $translated_var;
+		push @{$translation->{vars}}, $translated_var;                  #
 	}
 
 	return;

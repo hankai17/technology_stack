@@ -41,20 +41,23 @@ sub main {
 	# silent implies quiet
 	$quiet = 1 if $silent;
 
-	while (<>) {    #<>以@ARGV为默认参数 #<>将后面的参数按空格区分为文件名，一个个进行打开操作
+	while (<>) {            #<>以@ARGV为默认参数 #<>将后面的参数按空格区分为文件名，一个个进行打开操作
 		chomp;
-		push @input, $_;
+		push @input, $_;    #$_ 即每行字串(去掉换行符)
 	}
 
 	# ModSecurity ruleset parsing
 	# clean the input and build an array of tokens
 	my @parsed_lines = map { parse_tokens(tokenize($_)) } clean_input(@input);
+                            #最终parsed_line中每个元素都是一条规则 规则里包含VOA
 
 	# ModSecurity knows where it lives in a chain
 	# via pointer arithmetic and internal state handling
 	# we need to be a little more obvious about chain
 	# definitions for the purposes of translation
+                            # (rule1, rule2, rule3.1, rule3.2, rule4)
 	my @modsec_chains = build_chains(@parsed_lines);
+                            # (rule1, rule2, [rule3.1, rule3.2], rule4)
 
 	# do the actual translation
 	my $lua_resty_waf_chains = translate_chains({
