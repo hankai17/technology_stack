@@ -3,6 +3,33 @@ my @inner = ("Earth", "Moon");
 $outer[3] = @inner; #scalar #@inner就会在scalar上下文中被求值
 print $outer[3]; # "2"
 print "\n";
+print "\n";
+
+my @outer = ("Sun", "chain", "Venus", "chain", "Mars");
+sub build_chains {
+	my (@rules) = @_;
+	my (@chain, @chains);
+	for my $rule (@rules) {
+		push @chain, $rule;
+        #print "rule: ", $rule, "\n";
+		next if $rule eq 'chain';
+        print join ", ", map { $_ } @chain;
+        print "\n";
+		push @chains, [ @chain ];
+		@chain = ();
+	}
+	return @chains;
+}
+
+@outer = build_chains(@outer);
+print join ", ", map { $_ } @outer;
+print "\n";
+print "\n";
+for my $rule (@outer) {
+    print $rule, "\n";
+}
+print "\n";
+print "\n";
 
 #refer
 my $colour    = "Indigo";

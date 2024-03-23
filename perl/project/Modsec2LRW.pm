@@ -578,7 +578,7 @@ sub build_chains {
 		# if the chain action isnt set, we're either a standalone rule
 		# or at the end of a chain; either way, push this chain
 		# to our array of chains and empty the current chain buffer
-		push @chains, [ @chain ];                                               #hankai TODO
+		push @chains, [ @chain ];                                               #数组里是 匿名数组 匿名数组里是多个或单个规则
 		@chain = ();
 	}
 
@@ -600,8 +600,7 @@ sub translate_chains {
 		body_filter   => [],
 	};
 
-	for my $chain (@chains) {                                                   # (rule1, rule2, [rule3.1, rule3.2], rule4)
-                                                                                # chain可能是一个元素 也可能是个匿名数组
+	for my $chain (@chains) {                                                   # ([rule1], [rule2], [rule3.1, rule3.2], [rule4])
 		try {
 			my @translation = translate_chain({
 				chain  => $chain,
@@ -631,7 +630,7 @@ sub translate_chains {
 # due to an imcompatability, die with the incompatible elements
 sub translate_chain {
 	my ($args) = @_;
-	my @chain  = @{$args->{chain}};                                 # chain可能是个元素 也可能是个匿名数组
+	my @chain  = @{$args->{chain}};                                 # chain是一个匿名数组 匿名数组里是多个或单个规则
 	my $silent = $args->{silent};
 	my $force  = $args->{force};
 	my $path   = $args->{path};
@@ -639,8 +638,11 @@ sub translate_chain {
 	my (@lua_resty_waf_chain, $chain_id, $chain_action, $ctr);
 
 	my @end_actions = qw(action msg logdata skip skip_after);
+    my $var = 0;
 
 	for my $rule (@chain) {
+        print "-------------------var: ", $var, "\n";
+        $var += 1;
 		my $translation = {};
 
 		if ($rule->{directive} eq 'SecRule') {
