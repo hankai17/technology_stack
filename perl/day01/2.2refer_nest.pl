@@ -21,11 +21,12 @@ sub build_chains {
 	return @chains;
 }
 
-@outer = build_chains(@outer);
-print join ", ", map { $_ } @outer;
+@outer1 = build_chains(@outer);
+print join ", ", map { $_ } @outer;     #Sun, chain, Venus, chain, Mars
 print "\n";
+print join ", ", map { $_ } @outer1;    #ARRAY(0x80e990), ARRAY(0x81ebb8), ARRAY(0x80d4a8)
 print "\n";
-for my $rule (@outer) {
+for my $rule (@outer1) {
     print $rule, "\n";
 }
 print "\n";

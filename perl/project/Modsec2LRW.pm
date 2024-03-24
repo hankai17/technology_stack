@@ -342,7 +342,7 @@ sub parse_tokens {                                  #hankai2 tokens是一个数�
 	die "Uh oh! We shouldn't have any fields left but we still have @tokens\n" if @tokens;
 
 	$entry->{directive} = $directive;
-	$entry->{vars}      = parse_vars($vars) if $vars;
+	$entry->{vars}      = parse_vars($vars) if $vars; #是一个数组引用
 	$entry->{operator}  = parse_operator($operator) if $operator;
 	$entry->{actions}   = parse_actions($actions) if $actions;
 
@@ -361,7 +361,9 @@ sub parse_vars {                                    #hankai2.1
     #ARGS:'/(foo|bar)/'
     #ARGS:/(foo|bar)/|ARGS:'/(foo|bar)/'
 
-	my (@tokens, @parsed_vars, @var_buf, $sentinal);
+    my (@tokens, @parsed_vars, @var_buf, $sentinal);
+    #my (@tokens, @var_buf, $sentinal);             #等价
+    #my $parsed_vars = [];
 	my @split_vars = split /\|/, $raw_vars;         #|暴力分割
 
 	# XXX
@@ -445,6 +447,7 @@ sub parse_vars {                                    #hankai2.1
 			}
 
 			push @{$prev_parsed_var->{ignore}}, $specific;                      # 与前面相同的合并 并添加一个ignore字段
+                                                                                #定义ignore数组引用之 
 			$parsed = $prev_parsed_var;
 			$parsed->{modifier} = '!';
 			push @parsed_vars, $parsed;
@@ -457,7 +460,7 @@ sub parse_vars {                                    #hankai2.1
 		push @parsed_vars, $parsed;                                             #将这个变量拆出来三部分 放到parsed里
 	}
 
-	return \@parsed_vars;
+    return \@parsed_vars;                                                       #返回的是一个数组引用
 }
 
 sub parse_operator {                                                            #hankai2.2
@@ -484,7 +487,7 @@ sub parse_operator {                                                            
 	$parsed->{operator} = $operator;
 	$parsed->{pattern}  = $pattern;
 
-	return $parsed;
+	return $parsed;                                                             #返回一个hash引用
 }
 
 sub parse_actions {                                                             #hankai 2.3
@@ -630,7 +633,7 @@ sub translate_chains {
 # due to an imcompatability, die with the incompatible elements
 sub translate_chain {
 	my ($args) = @_;
-	my @chain  = @{$args->{chain}};                                 # chain是一个匿名数组 匿名数组里是多个或单个规则
+	my @chain  = @{$args->{chain}};                                 # chain是一个匿名数组 匿名数组里是单条规则或多条规则组成的chain
 	my $silent = $args->{silent};
 	my $force  = $args->{force};
 	my $path   = $args->{path};
@@ -638,11 +641,11 @@ sub translate_chain {
 	my (@lua_resty_waf_chain, $chain_id, $chain_action, $ctr);
 
 	my @end_actions = qw(action msg logdata skip skip_after);
-    my $var = 0;
+    #my $var = 0;
 
 	for my $rule (@chain) {
-        print "-------------------var: ", $var, "\n";
-        $var += 1;
+        #print "-------------------var: ", $var, "\n";
+        #$var += 1;
 		my $translation = {};
 
 		if ($rule->{directive} eq 'SecRule') {
@@ -707,7 +710,7 @@ sub translate_vars {
 	# this necessitates that a lua-resty-waf rule vars key is an array
 	for my $var (@{$rule->{vars}}) {                                    #参考hankai2.1
 		my $original_var = $var->{variable};
-		my $lookup_var   = clone($valid_vars->{$original_var});         #从字典中查找该变量名 # hankai TODO clone?
+		my $lookup_var   = clone($valid_vars->{$original_var});         #从字典中查找该变量名 #深copy
 	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ qw(values 1) ] },
 
 		die "Cannot translate variable $original_var" if !$lookup_var && !$force;
@@ -743,7 +746,7 @@ sub translate_vars {
 
 				push @{$translated_var->{ignore}}, [ ($key, $elt) ];
 	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ qw(values 1) ], ignore => [ regex, (foo|bar) ] },
-	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ qw(values 1) ], ignore => [ regex, (foo|bar) ] [ ignore, '(foo|bar)'] },
+	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ qw(values 1) ], ignore => [[ regex, (foo|bar) ], [ ignore, '(foo|bar)']] },
 			}
 		} elsif (length $specific) {
 			my $key = $specific_regex ? 'regex' : 'specific';           #名字起的不好 同上
@@ -760,7 +763,7 @@ sub translate_vars {
 		}
 	                                                                    #lookup_var = { type => 'REQUEST_ARGS', parse => [ regex, (foo|bar), specific, '(foo|bar)' ], length => 1 },
 
-		push @{$translation->{vars}}, $translated_var;                  #
+		push @{$translation->{vars}}, $translated_var;                  #将这一个匿名的var结构放到vars引用的数组中去
 	}
 
 	return;
@@ -779,7 +782,8 @@ sub translate_operator {
 	# rather than create separate-but-mostly equal operators
 	# in these cases the lookup table gives us a function we can use
 	# to get both the operator and the altered pattern
-	if (any { $_ eq $original_operator } @alters_pattern_operators) {
+	if (any { $_ eq $original_operator } @alters_pattern_operators) {   #beginsWith       => sub { my $pattern = shift; return('REFIND', "^$pattern"); },
+                                                                        #如果命中特殊的三剑客
 		my ($operator, $pattern) = $translated_operator->($rule->{operator}->{pattern});
 		$translation->{operator} = $operator;
 		$translation->{pattern}  = $pattern;
@@ -792,6 +796,7 @@ sub translate_operator {
 
 	# force int
 	$translation->{pattern} += 0 if $translation->{pattern} =~  m/^\d*(?:\.\d+)?$/;
+                                                                        #如果是纯数字则强转为int/float?
 
 	# this operator reads from a file.
 	# read the file and build the pattern table
