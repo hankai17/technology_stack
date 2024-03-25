@@ -161,3 +161,8 @@ export PATH=$PATH:$GOPATH:/usr/local/go/bin
 #curl -vL -k -X PUT -F "file=@/root/post.file" "https://wms-web-api.benlai.com/pktest/60639/sendresult" -H "Host: wms-web-api.benlai.com"
 #hc=$(seq 100 | xargs -I {} curl "http://127.0.0.1:9080/headers" -sL | grep "httpbin" | wc -l); echo httpbin.org: $hc, mock.api7.ai: $((100 - $hc))
 #tail -n20 detectdown.log_80 | grep "CONNECT_ERROR_2" | awk '{print "http://"$5}' | xargs -n1 -I {} curl -v -o /dev/null {} 
+
+# vim table转空格
+#set ts=4
+#set expandtab
+#%retab!
