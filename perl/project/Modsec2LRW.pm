@@ -673,11 +673,11 @@ sub translate_chain {
         # lua-resty-waf only requires that each rule has an ID,
         # not that each rule's ID must be unique
         $chain_id = $translation->{id} if $translation->{id};
-        $translation->{id} = $chain_id if ! $translation->{id};
+        $translation->{id} = $chain_id if ! $translation->{id};     #如果子链没有id则复用父链的id
 
         # these actions exist in the chain starter in ModSecurity
         # but they belong in the final rule in lua-resty-waf
-        for my $action (@end_actions) {
+        for my $action (@end_actions) {                             #只有最后的action生效
             $chain_action->{$action} = delete $translation->{$action} if $translation->{$action};
         }
 
@@ -685,7 +685,7 @@ sub translate_chain {
         # had to be pushed from the chain starter, or assign the default
         # if the chain starter didn't specify. otherwise, we're at the start
         # or middle of a chain, so the only thing we know to do is set the CHAIN action
-        if (++$ctr == scalar @chain) {
+        if (++$ctr == scalar @chain) {                              #数组的最后一个
             for my $action (@end_actions) {
                 if ($chain_action->{$action}) {
                     $translation->{$action} = $chain_action->{$action};
@@ -939,16 +939,19 @@ sub translate_actions {
             delete $translation->{opts}->{nolog} if defined $translation->{opts};
         } elsif ($key eq 'skipAfter') {
             $translation->{skip_after} = $value;
-        } elsif ($key eq 'setvar') {
+        } elsif ($key eq 'setvar') {                                    #setvar:tx.score=+5
+                                                                        #setvar:tx.anomaly_score=+%{tx.critical_anomaly_score}
+                                                                        #setvar:'tx.msg=%{rule.msg}',  
+                                                                        #setvar:tx.%{rule.id}-OWASP_CRS/WEB_ATTACK/SQL_INJECTION-%{matched_var_name}=%{matched_var}"
             my ($var, $val)            = split /=/, $value;
             my ($collection, @elements) = split /\./, $var;
 
             my $element = join '.', @elements;
 
             # no $val, perhaps a delete?
-            if (! defined $val) {
+            if (! defined $val) {                                       #setvar:!tx.score #删除变量
                 if ($var =~ m/^\!/) {
-                    substr $collection, 0, 1, '';
+                    substr $collection, 0, 1, '';                       #剔除!
 
                     push @{$translation->{actions}->{nondisrupt}}, {
                         action => 'deletevar',
@@ -963,18 +966,18 @@ sub translate_actions {
                 next;
             }
 
-            my $setvar = { col => uc $collection, key => uc $element };
+            my $setvar = { col => uc $collection, key => uc $element }; #{col => TX, key => score }
 
             if ($val =~ m/^\+/) {
                 substr $val, 0, 1, '';
-                $setvar->{inc} = 1;
+                $setvar->{inc} = 1;                                     #{col => TX, key => score, inc => 1 };
             }
 
             if ($val =~ m/^\d*(?:\.\d+)?$/) {
-                $val += 0;
+                $val += 0;                                              #val强转整型
             } else {
-                $val = translate_macro($val);
-            }
+                $val = translate_macro($val);                           #{col => TX, key => score, inc => 1, val => 111 };
+            }                                                           #{col => TX, key => score, inc => 1, val => %{rule.id}-%{matched_var_name} };
 
             $setvar->{value} = $val;
 
