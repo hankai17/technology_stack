@@ -29,9 +29,42 @@ struct stats_nginx_domain {
     unsigned long long n5XX;        /* 5XX status code */
     unsigned long long nother;      /* other status code & http version 0.9 responses */
     unsigned long long rt;          /* response time sum of total requests */
-    unsigned long long uprt;        /* response time sum of total upstream requests */
     unsigned long long upreq;       /* total upstream request */
-    unsigned long long upactreq;    /* actual upstream requests */
+    unsigned long long uprt;        /* response time sum of total upstream requests */
+    unsigned long long uptry;    /* actual upstream requests */
+    unsigned long long http_200;
+    unsigned long long http_206;
+    unsigned long long http_302;
+    unsigned long long http_304;
+    unsigned long long http_400;
+    unsigned long long http_403;
+    unsigned long long http_404;
+    unsigned long long http_416;
+    unsigned long long http_499;
+    unsigned long long http_500;
+    unsigned long long http_502;
+    unsigned long long http_503;
+    unsigned long long http_504;
+    unsigned long long http_508;
+    unsigned long long http_other_detail_status;
+    unsigned long long http_ups_4xx;
+    unsigned long long http_ups_5xx;
+    unsigned long long http_ups_ltc;
+    unsigned long long http_ups_200;
+    unsigned long long http_ups_206;
+    unsigned long long http_ups_302;
+    unsigned long long http_ups_304;
+    unsigned long long http_ups_400;
+    unsigned long long http_ups_403;
+    unsigned long long http_ups_404;
+    unsigned long long http_ups_416;
+    unsigned long long http_ups_499;
+    unsigned long long http_ups_500;
+    unsigned long long http_ups_502;
+    unsigned long long http_ups_503;
+    unsigned long long http_ups_504;
+    unsigned long long http_ups_508;
+    unsigned long long http_ups_other_detail_status;
 };
 
 /* struct for http domain */
@@ -241,12 +274,41 @@ read_nginx_domain_stats(struct module *mod, char *parameter)
         if ((p = strchr(line, ',')) == NULL) {
             continue;
         }
+        if ((p = strchr(p + 1, ',')) == NULL) {
+            continue;
+        }
+        if ((p = strchr(p + 1, ',')) == NULL) {
+            continue;
+        }
+        if ((p = strchr(p + 1, ',')) == NULL) {
+            continue;
+        }
+        if ((p = strchr(p + 1, ',')) == NULL) {
+            continue;
+        }
+        if ((p = strchr(p + 1, ',')) == NULL) {
+            continue;
+        }
         *p++ = '\0';    /* stat.domain terminating null */
 
         memset(&stat, 0, sizeof(struct stats_nginx_domain));
-        if (sscanf(p, "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
-                   "%*u,%*u,%*u,%*u,%*u,%*u,%*u,%*u,%*u,%*u,%*u,%*u,%*u,%*u",
-                   &stat.nbytesin, &stat.nbytesout, &stat.nconn, &stat.nreq, &stat.n2XX, &stat.n3XX, &stat.n4XX, &stat.n5XX, &stat.nother, &stat.rt, &stat.upreq, &stat.uprt, &stat.upactreq) != 13) {
+        // 13 14 1 17 1
+        int ret = 0;
+        ret = sscanf(p, "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
+                      "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
+                      "%llu,"
+                      "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
+                      "%llu",
+                    &stat.nbytesin, &stat.nbytesout, &stat.nconn, &stat.nreq, &stat.n2XX, &stat.n3XX, &stat.n4XX, &stat.n5XX, &stat.nother, &stat.rt, &stat.upreq, &stat.uprt, &stat.uptry,
+                    &stat.http_200, &stat.http_206, &stat.http_302, &stat.http_304, &stat.http_400, &stat.http_403, &stat.http_404, &stat.http_416, &stat.http_499, &stat.http_500, &stat.http_502, &stat.http_503, &stat.http_504, &stat.http_508,
+                    &stat.http_other_detail_status,
+                    &stat.http_ups_4xx, &stat.http_ups_5xx, &stat.http_ups_ltc, &stat.http_ups_200, &stat.http_ups_206, &stat.http_ups_302, &stat.http_ups_304, &stat.http_ups_400, &stat.http_ups_403, &stat.http_ups_404, &stat.http_ups_416, &stat.http_ups_499, &stat.http_ups_500, &stat.http_ups_502, &stat.http_ups_503, &stat.http_ups_504, &stat.http_ups_508,
+                    &stat.http_ups_other_detail_status
+                );
+        if (ret != 46) {
+            //printf("ret: %d, continue\n", ret);
+            //printf("line: %s\n", line);
+            //printf("p: %s\n", p);
             continue;
         }
         strcpy(stat.domain, line);
@@ -284,7 +346,7 @@ read_nginx_domain_stats(struct module *mod, char *parameter)
 
     for (i=0; i< top_domain; i++) {
         pos += snprintf(buf + pos, LEN_1M - pos, "%s=%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld" ITEM_SPLIT,
-                       nginx_domain_stats[i].domain, nginx_domain_stats[i].nconn, nginx_domain_stats[i].nreq, nginx_domain_stats[i].n2XX, nginx_domain_stats[i].n3XX, nginx_domain_stats[i].n4XX, nginx_domain_stats[i].n5XX, nginx_domain_stats[i].rt, nginx_domain_stats[i].uprt, nginx_domain_stats[i].upreq, nginx_domain_stats[i].upactreq);
+                       nginx_domain_stats[i].domain, nginx_domain_stats[i].nconn, nginx_domain_stats[i].nreq, nginx_domain_stats[i].n2XX, nginx_domain_stats[i].n3XX, nginx_domain_stats[i].n4XX, nginx_domain_stats[i].n5XX, nginx_domain_stats[i].rt, nginx_domain_stats[i].uprt, nginx_domain_stats[i].upreq, nginx_domain_stats[i].uptry);
         if (strlen(buf) == LEN_1M - 1) {
             fclose(stream);
             close(sockfd);
