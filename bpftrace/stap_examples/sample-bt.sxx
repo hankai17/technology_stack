@@ -1,0 +1,102 @@
+#!/usr/bin/env stap++
+
+global bts;
+global quit = 0
+
+probe timer.profile {           #每个system tick回调一次
+    if ($^pid_ok) {             # pid是否相等
+        %( "$^arg_execname :default()" != "" %?
+        if (execname() == "$^arg_execname") {   #进程名是否相等 如果存在的话
+        %)
+
+        if (!quit) {
+            #bts[ubacktrace()] <<< 1             #计数 这里有个大坑 如果采样时间长会导致消耗巨量内存 可以改用bts[ubacktrace()]++优化
+            bts[ubacktrace()]++
+            #bts[execname()] ++  #以进程名字为键，记录下每个进程调用某个函数的次数
+
+        } else {
+
+            foreach (usr in bts- limit $^arg_limit :default(1000)) {
+                print_ustack(usr)
+                #printf("\t%d\n", @count(bts[usr]))  #打印堆栈和数量 如果上面改为bts[ubacktrace()]++ 这里可以直接输出bts[usr]的值
+                printf("\t%d\n", bts[usr])
+            }
+
+            exit()
+        }
+
+        %( "$^arg_execname :default()" != "" %?
+        }
+        %)
+    }
+}
+
+probe timer.s($^arg_time) {     #timer.ms(200) 定时器 每200ms回调一次 # 通常设置脚本运行多久时间
+    nstacks = 0
+    foreach (bt in bts limit 1) {
+        nstacks++
+    }
+
+    if (nstacks == 0) {
+        warn("No backtraces found. Quitting now...\n")
+        exit()
+
+    } else {
+        warn("Time's up. Quitting now...(it may take a while)\n")
+        quit = 1
+    }
+}
+
+probe begin {
+    warn(sprintf("Start tracing process $^target ($^exec_path)...\n"))
+}
+
+#https://drecik.top/2018/07/10/17/
+#./stap++ samples/sample-bt.sxx -x PID -D MAXMAPENTRIES=102400 -D MAXBACKTRACE=100 -D MAXSTRINGLEN=4096 -D MAXACTION=100000 -D STP_OVERLOAD_THRESHOLD=5000000000 -D MAXSKIPPED=100000 --arg time=60 > ~/cpp.bt
+#cat ~/cpp.bt|c++filt|~/FlameGraph/stackcollapse-stap.pl|~/sysperf/FlameGraph/flamegraph.pl > ~/cpp.svg生成火焰图
+#
+# 0x7f28d5b0b2a6 : open+0xd6/0x130 [/usr/lib64/libpthread-2.28.so]
+# 0x564b20b30282 : zmalloc_get_rss+0x72/0x140 [/usr/bin/redis-server]
+# 0x564b20b292fd : serverCron+0x38d/0x840 [/usr/bin/redis-server]
+# 0x564b20b2260a : aeProcessEvents+0x44a/0x4b0 [/usr/bin/redis-server]
+# 0x564b20b2273b : aeMain+0x2b/0x40 [/usr/bin/redis-server]
+# 0x564b20b1f28e : main+0x3de/0x6e0 [/usr/bin/redis-server]
+# 0x7f28d576dd85 : __libc_start_main+0xe5/0x180 [/usr/lib64/libc-2.28.so]
+# 0x564b20b1f5de : _start+0x2e/0x30 [/usr/bin/redis-server]
+#        1
+# 0x564b20b1eb34 : _init+0x1c34/0x1d30 [/usr/bin/redis-server]
+# 0x564b20be69f4 : je_arena_stats_merge+0xa44/0xb20 [/usr/bin/redis-server]
+# 0x564b20beb457 : ctl_arena_stats_amerge+0x47/0x1e0 [/usr/bin/redis-server]
+# 0x564b20c0c42a : ctl_refresh+0x10a/0x2f0 [/usr/bin/redis-server]
+# 0x564b20c0c838 : epoch_ctl+0x68/0x280 [/usr/bin/redis-server]
+# 0x564b20c0cb06 : je_ctl_byname+0xb6/0xf0 [/usr/bin/redis-server]
+# 0x564b20b303c0 : zmalloc_get_allocator_info+0x70/0xf0 [/usr/bin/redis-server]
+# 0x564b20b2932a : serverCron+0x3ba/0x840 [/usr/bin/redis-server]
+# 0x564b20b2260a : aeProcessEvents+0x44a/0x4b0 [/usr/bin/redis-server]
+# 0x564b20b2273b : aeMain+0x2b/0x40 [/usr/bin/redis-server]
+# 0x564b20b1f28e : main+0x3de/0x6e0 [/usr/bin/redis-server]
+# 0x7f28d576dd85 : __libc_start_main+0xe5/0x180 [/usr/lib64/libc-2.28.so]
+# 0x564b20b1f5de : _start+0x2e/0x30 [/usr/bin/redis-server]
+#        1
+# 0x7f28d5b0aab4 : __read+0x44/0xa0 [/usr/lib64/libpthread-2.28.so]
+# 0x564b20b302a0 : zmalloc_get_rss+0x90/0x140 [/usr/bin/redis-server]
+# 0x564b20b292fd : serverCron+0x38d/0x840 [/usr/bin/redis-server]
+# 0x564b20b2260a : aeProcessEvents+0x44a/0x4b0 [/usr/bin/redis-server]
+# 0x564b20b2273b : aeMain+0x2b/0x40 [/usr/bin/redis-server]
+# 0x564b20b1f28e : main+0x3de/0x6e0 [/usr/bin/redis-server]
+# 0x7f28d576dd85 : __libc_start_main+0xe5/0x180 [/usr/lib64/libc-2.28.so]
+# 0x564b20b1f5de : _start+0x2e/0x30 [/usr/bin/redis-server]
+#        1
+# 0x7f28d5b0ab47 : __close+0x37/0x80 [/usr/lib64/libpthread-2.28.so]
+# 0x564b20b302b0 : zmalloc_get_rss+0xa0/0x140 [/usr/bin/redis-server]
+# 0x564b20b292fd : serverCron+0x38d/0x840 [/usr/bin/redis-server]
+# 0x564b20b2260a : aeProcessEvents+0x44a/0x4b0 [/usr/bin/redis-server]
+# 0x564b20b2273b : aeMain+0x2b/0x40 [/usr/bin/redis-server]
+# 0x564b20b1f28e : main+0x3de/0x6e0 [/usr/bin/redis-server]
+# 0x7f28d576dd85 : __libc_start_main+0xe5/0x180 [/usr/lib64/libc-2.28.so]
+# 0x564b20b1f5de : _start+0x2e/0x30 [/usr/bin/redis-server]
+#        1
+# 0x7f28d5b0745c : pthread_cond_wait@@GLIBC_2.3.2+0x1fc/0x2f0 [/usr/lib64/libpthread-2.28.so]
+#        1
+# 0x7f28d5863027 : epoll_wait+0x57/0xb0 [/usr/lib64/libc-2.28.so]
+#        1

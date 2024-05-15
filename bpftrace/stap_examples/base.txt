@@ -1,0 +1,69 @@
+-L
+    可以打印出函数局部变量的信息(注意编译器需要-g -O0)
+    stap -L 'process("./a.out").function("func")'
+    process("/home/codedump/source/systemtap-examples/src/a.out").function("func@/home/codedump/source/systemtap-examples/src/test.c:7") $a:int $b:int $c:int
+
+    查询内核中包含tcp_的探针：
+    stap -L 'kernel.function("*")' | grep tcp_ | more
+
+变量
+    目标变量(Target Variables)
+        目标变量指的是当前代码位置可见的变量 比如上面的test.c:第7行的 $a:int $b:int $c:int 
+    全局变量
+        如果不是在当前代码位置的变量 可以通过这种格式拿到: @var("varname@src/file.c")
+    打印结构体内容
+        打印其成员分布 可以首先使用 $变量名$
+        想知道全局变量的结构体成员分布就需要 @var("全局变量名@src/file.c")$
+
+    类型转换
+        @cast(p, "type_name"[, "module"])->member
+        eg:
+            @cast(tv, "timeval", "<sys/time.h>")->tvsec
+            @cast(task, "taskstruct", "kernel<linux/sched.h>")->tgid
+            @cast(task, "taskstruct", "kernel<linux/sched.h><linux/fsstruct.h>")->fs->umask
+    局部变量
+        $$vars 打印函数的所有局部变量以及传递进来的函数参数
+        $$parms 属于vars的子集 打印函数传递进来的函数参数
+        $$locals 属于vars的子集打 印函数的所有局部变量
+        $$return 打印函数的返回值
+
+关联数组(Associative Arrays)
+    即map
+        stap中的map嵌套写法有点怪 bt[execname(),tid(),$mem,sprint_ubacktrace()] = 1
+        等价于c++ 的map           bt[execname()][tid()][$mem,sprint_ubacktrace()] = 1
+        最多允许嵌套9个键
+    遍历关联数组
+        foreach (element in array_name)
+    元素是否存在
+        if([index_expression] in array_name) statement
+        if(["stapio"] in reads) {}
+
+探测点
+    probe event { statement }
+    event分为两种:
+        同步事件: 发生在进程执行某一条确定的命令时的事件
+            前缀部分: 定义所在的模块 可以是内核 用户进程 systemtap在tapset中预定义的探测点
+                内核: 语法为kernel.function(PATTERN) 以kernel开头就是内核中的函数
+                内核模块: 语法为module(MPATTERN).function(PATTERN) 即以module(MPATTERN)开头来指定的就是内核模块中的函数
+                用户进程: 语法为process(PROCESSPATH).function(PATTERN) 即以process(PROCESSPATH)开头来指定的就是用户进程的函数
+                异步调用的模块: 比如begin end timer等。
+                如果不是以上的格式，那么大概率就是systemtap自带的tapset中已经定义的探测点 实际上这些还是封装了以上几种调用的别名（alias）探测点 后面将谈到探测点的别名定义 tapset于systemtap的意义 就好比libc库于C程序的意义
+            中间部分: 定义所在的函数 函数可以通过函数名指定 也可以根据文件名:行号指定 通过两种方式指定
+                function(PATTERN)
+                statement(PATTERN)
+                PATTERN由三部分组成: func[@file][:linenumber] 即函数名 [@文件名] 行号
+                函数名这部分可以使用通配符（wildcarded）来定义文件的名字以及函数的名字 eg: process("/home/admin/nginx/bin/nginx").function("ngx_http_process_*")
+                eg:
+                stap -l 'process("./a.out").function("fu*")'
+                process("/home/codedump/source/systemtap-examples/src/a.out").function("func1@/home/codedump/source/systemtap-examples/src/test.c:3")
+            后缀部分: 定义调用时机 可以在函数调用时触发 也可以在函数返回时触发
+                eg: probe kernel.function("*@net/socket.c").call {}   即调用时
+                eg: probe kernel.function("*@net/socket.c").return {} 即返回时
+                分别在socket.c中的任何函数被调用以及返回的时候被调用
+        异步事件: 不是执行到指定的指令或代码位置 这一类包括计时器 定时器等
+            begin end分别在脚本开始执行以及结束执行的时候被调用
+            timers 用于定义定时器探测点 常见的格式timer.s(1)来定义每秒触发的探测点
+            never 定义的探测点不会被调用到 很多时候加这个探测点只是为了检查一些语法错误
+    
+
+https://github.com/lichuang/awesome-systemtap-cn
