@@ -1,0 +1,176 @@
+// Rust 被称作表达式语言
+let status = if cpu.temperature <= MAX_TEMP {   // 类似三元运算符
+    HttpStatus::Ok
+} else {
+    HttpStatus::ServerError
+};
+
+println!(
+    "Inside the vat, you see {}.",
+    match vat.contents {
+        Some(brain) => brain.desc(),
+        None => "nothing of interest",
+    }
+);
+
+fn main() {
+    let display_name = match post.author() {	// 大括号即块表达式 它能产生一个值 可以在任何需要值的地方使用
+        Some(author) => author.name(),			// => 后面是简单的表达式
+        None => {
+            let network_info =
+                post.get_network_metadata()?;   // ?会自助返回None
+            let ip = network_info.client_address();
+            ip.to_string()						// 没有分号
+        }
+    };
+}
+
+fn main() {
+    let msg = {
+        let dandelion_control = puffball.open(); 			// let语句 分号是必要的
+        dandelion_control.release_all_seeds(launch_codes); 	// 表达式 + 分号 则方法被调用 但返回值被丢弃
+        dandelion_control.get_status() 						// 表达式没有分号 则方法被调用 值被存储在msg中
+    };
+}
+
+                            // let name: type = expr;	// 声明 // type 和 expr 是可以省略
+let name;					// 先声明 下面的逻辑中进行初始化
+if user.has_nickname() {	// name仅被初始化一次 所以无需声明为mut类型 在没有初始化之前使用变量是不允许的
+    name = user.nickname();
+} else {
+    name = generate_unique_name();
+    user.register(&name);
+}
+
+for line in file.lines() {	// 类型屏蔽
+    let line  = line?;		// line开始的类型是 Result<String, io::Error> 这一行类型是String
+}
+
+if condition1 { 			// condition必须是bool类型的表达式 Rust不会对数字或者指针进行隐式转换
+    block1
+} else if condition2 { 
+    block2
+}else{
+    block_n
+}
+
+match code {				// 类似c中的switch
+    0 => println!("OK"),
+    1 => println!("Wires Tangled"),
+    2 => println!("User Asleep"),
+    _ => println!("Unrecognized Error {}", code)
+                            // 像switch中的default 匹配任何东西 必须放在最后
+}
+
+match value { 
+    pattern => expr,		// rust中 match表达式必须包含所有可能的情况
+}
+
+let suggested_pet =										// 所有的if分支返回的值类型必须相同 // match表达式也是 所有的分支必须返回相同类型的值
+    if with_wings { Pet::Buzzard } else { Pet::Hyena }; // ok 
+let favorite_number =
+    if user.is_hobbit() { "eleventy-one" } else { 9 }; 	// 错误
+
+let suggested_pet =
+    match favorites.element {
+        Fire => Pet::RedPanda,
+        Air => Pet::Buffalo,
+        Water => Pet::Orca,
+        _ => None 										// 错误 不兼容的类型
+    };
+
+if let pattern = expr {									// 如果给定的表达式expr匹配pattern 那么block1将会运行
+     block1												// if let可做的事情match都可以做 所以if let只是match的一种简写方式
+} else {
+    block2
+}
+
+while condition {										// 循环
+    block
+}
+while let pattern = expr {
+    block
+}
+loop {
+    block
+}
+for pattern in itertable {
+    block
+}
+
+fn main() {
+    let strings = vec!["hello", "world"];
+    for s in strings {                                  // value borrowed here after move
+        println!("{}", s); 								// each String is moved into s here // Move语义
+    }
+    println!("{} error(s)", strings.len()); 			// error: use of moved value
+}
+
+for rs in &strings {
+    println!("String {:?}  at address {:p}.", *rs, rs);	// 使用引用迭代集合
+}
+
+fn main() {
+    let mut strings = vec!["hello".to_string(), "world".to_string()];
+    for s in &mut strings {								// 如果我们在迭代过程中需要对它进行更改 可以获取strings的muteable reference
+        s.push_str("\n");
+        println!("{}", s);
+    }
+    println!("{} error(s)", strings.len());
+}
+
+let answer = loop {
+    if let Some(line) = next_line() {
+        if line.starts_with("answer: ") {
+            break line; 
+        }
+    } else {
+        break "answer: nothing";
+    } 
+};
+
+let sqrt = 'outer: loop {
+    let n = next_number();
+    for i in 1.. {
+        let square = i*i;
+        if square == n {
+            break 'outer i; 							// Found a square root // break语句也可以将表达式和label一起使用
+        }
+        if square > n {
+            // `n` isn't a perfect square, try the next break;
+        } 
+    }
+};
+
+// 如果最后一个表达式没有以;结尾 那么它就是函数的返回值 一般情况下这是Rust函数中用于返回值得首选方式
+
+pub fn exit(code: i32) -> ! {		// !表示never类型 // 有些函数无法正常完成 它们的返回值难以确定是什么类型
+									// 未正常完成的表达式被分配到特殊类型 !
+									// 并且它们不受类型必须匹配的规则的约束
+    crate::rt::cleanup();
+    crate::sys::os::exit(code)
+}
+
+
+// 函数和方法调用
+let room = player.location();		// player可能是Player &Player Box<Player> 或 Rc<Player>
+									// .location()方法可以通过值或引用来获取player 因为Rust的.运算符能够自动解引用或根据需要创建引用
+
+// 另外一种语法是和类型关联的函数 如Vec::new() 类似于面向对象语言中的静态方法
+
+fn quicksort<T: Ord>(slice: &mut [T]) { 
+    if slice.len() <= 1 {
+        return;
+    }
+    let pivot_index = partition(slice);
+    quicksort(&mut slice[.. pivot_index]);		// 字段和索引
+    quicksort(&mut slice[pivot_index + 1 ..]); 
+}
+
+// 不支持自增自减运算符
+
+// 类型转换需要显示的使用as关键字
+
+// 内建的数字类型可以相互转换
+// bool或char类型或类似C的枚举类型的值可以转换为任何整数类型 但是反过来转换是不允许的
+
