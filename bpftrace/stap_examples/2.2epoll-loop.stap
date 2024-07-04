@@ -1,10 +1,4 @@
-#!/usr/bin/env stap++
-
-# OPS-935
-# Measure the blocking effect in an event loop driven by epoll_wait.
-#
-# Accept the argument "limit" for the blocking time threshold,
-# which defaults to 200 (ms).
+#!/usr/bin/env stap
 
 global begin
 
@@ -17,7 +11,7 @@ probe syscall.epoll_wait.return {
 probe syscall.epoll_wait {
     if (target() == pid() && begin > 0) {
         elapsed = gettimeofday_ms() - begin
-        if (elapsed >= $^arg_limit :default(200)) {
+        if (elapsed >= 200) {
             printf("[%d] epoll loop blocked for %dms\n",
                    gettimeofday_s(), elapsed)
         }
@@ -27,3 +21,5 @@ probe syscall.epoll_wait {
 probe begin {
     printf("Start tracing %d...\n", target())
 }
+
+#./2.2epoll-loop.stap --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200 -x 11945

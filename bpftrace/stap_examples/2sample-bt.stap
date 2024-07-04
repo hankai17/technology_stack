@@ -1,0 +1,60 @@
+#!/usr/bin/env stap
+
+global bts;
+global quit = 0
+
+probe timer.profile {           # 每个system tick回调一次
+    if (pid() == target()) {
+        %( "" != "" %?
+        if (execname() == "") { # 进程名是否相等 如果存在的话
+        %)
+
+        if (!quit) {
+            bts[ubacktrace()] <<< 1
+            #bts[ubacktrace()]++
+
+        } else {
+
+            foreach (usr in bts- limit 1000) {
+                print_ustack(usr)
+                printf("\t%d\n", @count(bts[usr]))
+                #printf("\t%d\n", bts[usr])
+            }
+
+            exit()
+        }
+
+        %( "" != "" %?
+        }
+        %)
+    }
+}
+
+probe timer.s(14) {
+    nstacks = 0
+    foreach (bt in bts limit 1) {
+        nstacks++
+    }
+
+    if (nstacks == 0) {
+        warn("No backtraces found. Quitting now...\n")
+        exit()
+
+    } else {
+        warn("Time's up. Quitting now...(it may take a while)\n")
+        quit = 1
+    }
+}
+
+probe begin {
+    warn(sprintf("Start tracing process 11945 (/usr/local/nginx/sbin/nginx)...\n"))
+}
+
+# stap --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200 -x 11945 -d /usr/local/nginx/sbin/nginx -d /usr/lib64/ld-2.28.so -d /usr/lib64/libblkid.so.1.1.0 -d /usr/lib64/libc-2.28.so -d /usr/lib64/libcap.so.2.48 -d /usr/lib64/libcrypt.so.1.1.0 -d /usr/lib64/libdl-2.28.so -d /usr/lib64/libgcc_s-8-20210514.so.1 -d /usr/lib64/libmount.so.1.1.0 -d /usr/lib64/libnss_files-2.28.so -d /usr/lib64/libnss_sss.so.2 -d /usr/lib64/libnss_systemd.so.2 -d /usr/lib64/libpcre.so.1.2.10 -d /usr/lib64/libpcre2-8.so.0.7.1 -d /usr/lib64/libpthread-2.28.so -d /usr/lib64/librt-2.28.so -d /usr/lib64/libselinux.so.1 -d /usr/lib64/libuuid.so.1.3.0 -d /usr/lib64/libz.so.1.2.11 -I stapxx-w1s9yCCz -
+
+#./2sample-bt.stap --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200 -x 11945 > 1.log
+
+#加载了更多的符号 显示的更详细一些
+#./2sample-bt.stap --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200 -x 11945 -d /usr/local/nginx/sbin/nginx -d /usr/lib64/ld-2.28.so -d /usr/lib64/libblkid.so.1.1.0 -d /usr/lib64/libc-2.28.so -d /usr/lib64/libcap.so.2.48 -d /usr/lib64/libcrypt.so.1.1.0 -d /usr/lib64/libdl-2.28.so -d /usr/lib64/libgcc_s-8-20210514.so.1 -d /usr/lib64/libmount.so.1.1.0 -d /usr/lib64/libnss_files-2.28.so -d /usr/lib64/libnss_sss.so.2 -d /usr/lib64/libnss_systemd.so.2 -d /usr/lib64/libpcre.so.1.2.10 -d /usr/lib64/libpcre2-8.so.0.7.1 -d /usr/lib64/libpthread-2.28.so -d /usr/lib64/librt-2.28.so -d /usr/lib64/libselinux.so.1 -d /usr/lib64/libuuid.so.1.3.0 -d /usr/lib64/libz.so.1.2.11 > 1.log
+
+#cat 1.log|c++filt|~/FlameGraph/stackcollapse-stap.pl|~/sysperf/FlameGraph/flamegraph.pl > ~/cpp.svg生成火焰图

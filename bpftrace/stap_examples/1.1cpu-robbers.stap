@@ -1,0 +1,72 @@
+#!/usr/bin/env stap
+
+global robbers, total
+
+probe scheduler.ctxswitch {
+    my_pid = target()                       # -x 的传参通过target()获取
+    if (prev_pid == my_pid && next_pid != 0 # 统计从当前线程 切到哪里了
+            && next_pid != my_pid) {
+        name = pid2execname(next_pid)
+        if (name == "") {
+            name = sprintf("%d", next_pid)
+        }
+        robbers[name] <<< 1
+        total++
+    }
+}
+
+probe end {
+    printf("\n")
+    i = 0
+    foreach (robber in robbers- limit 20) {
+        i++
+        cnt = @count(robbers[robber])
+        printf("#%d %s: %d%% (%d samples)\n", i, robber, cnt * 100 / total, cnt)
+    }
+    if (i == 0) {
+        printf("No CPU time robbers found so far.\n")
+    }
+}
+
+probe begin {
+    printf("Start tracing process %d (/usr/local/nginx/sbin/nginx)...\n", target())
+    %( "14" != ""  %?
+    printf("Please wait for 14 seconds...\n")
+    %:
+    printf("Hit Ctrl-C to end.\n")
+    %)
+}
+
+%( "14" != ""  %?
+probe timer.s(14) {
+    exit()
+}
+%)
+
+#https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/7/html/systemtap_tapset_reference/api-scheduler-ctxswitch
+#prev_id next_id的由来
+
+#stap --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200 -x 11945 -d /usr/local/nginx/sbin/nginx -d /usr/lib64/ld-2.28.so -d /usr/lib64/libblkid.so.1.1.0 -d /usr/lib64/libc-2.28.so -d /usr/lib64/libcap.so.2.48 -d /usr/lib64/libcrypt.so.1.1.0 -d /usr/lib64/libdl-2.28.so -d /usr/lib64/libgcc_s-8-20210514.so.1 -d /usr/lib64/libmount.so.1.1.0 -d /usr/lib64/libnss_files-2.28.so -d /usr/lib64/libnss_sss.so.2 -d /usr/lib64/libnss_systemd.so.2 -d /usr/lib64/libpcre.so.1.2.10 -d /usr/lib64/libpcre2-8.so.0.7.1 -d /usr/lib64/libpthread-2.28.so -d /usr/lib64/librt-2.28.so -d /usr/lib64/libselinux.so.1 -d /usr/lib64/libuuid.so.1.3.0 -d /usr/lib64/libz.so.1.2.11 -I stapxx-pPNyhMNi -
+#
+#
+#
+#Start tracing process 11945 (/usr/local/nginx/sbin/nginx)...
+#Please wait for 14 seconds...
+#
+##1 ab: 88% (3921 samples)
+##2 kworker/0:1: 7% (315 samples)
+##3 ksoftirqd/0: 4% (200 samples)
+##4 stapio: 0% (18 samples)
+##5 watchdog/0: 0% (1 samples)
+
+
+# taskset -c 2 ab后
+#./1.1cpu-robbers.stap --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200 -x 11945 
+#Start tracing process 11945 (/usr/local/nginx/sbin/nginx)...
+#Please wait for 14 seconds...
+#
+##1 ksoftirqd/0: 55% (411 samples)
+##2 kworker/0:2: 41% (304 samples)
+##3 stapio: 2% (20 samples)
+##4 kworker/0:1H: 0% (2 samples)
+##5 watchdog/0: 0% (2 samples)

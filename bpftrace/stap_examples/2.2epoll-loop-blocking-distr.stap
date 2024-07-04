@@ -1,7 +1,4 @@
-#!/usr/bin/env stap++
-
-# Measure the distribution of the blocking latency in an event loop
-# driven by epoll_wait.
+#!/usr/bin/env stap
 
 global begin, stats
 
@@ -17,7 +14,7 @@ probe syscall.epoll_wait {
     }
 }
 
-probe timer.s($^arg_time :default(5)) {
+probe timer.s(5) {
     exit()
 }
 
@@ -33,6 +30,8 @@ probe end {
 }
 
 probe begin {
-    printf("Start tracing %d ($^exec_path)...\nPlease wait for %d seconds.\n\n",
-           target(), $^arg_time)
+    printf("Start tracing %d (/usr/local/nginx/sbin/nginx)...\nPlease wait for %d seconds.\n\n",
+           target(), 5)
 }
+
+#./2.2epoll-loop-blocking-distr.stap --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200 -x 11945 

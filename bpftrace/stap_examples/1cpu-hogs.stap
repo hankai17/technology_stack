@@ -1,0 +1,59 @@
+#!/usr/bin/env stap
+
+global stats, total
+
+probe timer.profile {
+    total++
+    stats[execname()] <<< 1
+}
+
+probe begin {
+    printf("Tracing the whole system...\n")
+    %( "10" != ""  %?
+    printf("Please wait for 10 seconds...\n")
+    %:
+    printf("Hit Ctrl-C to end.\n")
+    %)
+}
+
+probe end {
+    if (!total) {
+        printf("\nNo samples found so far.\n")
+
+    } else {
+        printf("\n")
+        foreach (name in stats- limit 20) {
+            printf("%s %d%%\n", name, @count(stats[name]) * 100 / total)
+        }
+    }
+}
+
+
+%( "10" != ""  %?
+probe timer.s(10) {
+    exit()
+}
+%)
+
+#./1cpu-hogs.stap  --skip-badvars -DMAXACTION=100000 -DMAXMAPENTRIES=5000 -DMAXBACKTRACE=200
+#Tracing the whole system...
+#Please wait for 10 seconds...
+#
+#ab 24%
+#swapper/3 20%
+#swapper/2 19%
+#swapper/0 17%
+#swapper/1 10%
+#nginx 6%
+#kworker/1:3 0%
+#kworker/2:1 0%
+#kworker/0:2 0%
+#ksoftirqd/1 0%
+#sssd_kcm 0%
+#ksoftirqd/0 0%
+#systemd-journal 0%
+#vmtoolsd 0%
+#WARNING: Number of errors: 0, skipped probes: 43
+
+
+#https://sourceware.org/systemtap/examples/
