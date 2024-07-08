@@ -27,23 +27,28 @@ def limit_sinx_x():
     print(sp.limit(y, x, 0))
 
 def x():
-    x1 = np.arange(-100, -2, 0.01)
-    x2 = np.arange(0, 100, 0.01)
+    x1 = np.arange(-2, -1, 0.01)
+    x2 = np.arange(-0.99, -0.90, 0.01)
+    x3 = np.arange(0, 10, 0.01)
     y1 = (1 + 1 / x1) ** x1
     y2 = (1 + 1 / x2) ** x2
+    y3 = (1 + 1 / x3) ** x3
     plt.figure()
-    plt.plot(x1, y1, x2, y2)
+    plt.plot(x1, y1, x2, y2, x3, y3)
+    #plt.plot(x2, y2)
     plt.grid(True)
+    plt.legend()
     plt.show()
 
 def limit_x():
     x = sp.symbols('x')
     y = (1 + 1 / x) ** x
+    print(sp.limit(y, x, -0.09))
     print(sp.limit(y, x, sp.oo))
     print(sp.limit(y, x, -sp.oo))
     print(sp.limit(y, x, 0, dir="+"))
     print(sp.limit(y, x, 0, dir="-"))
 
 #sinx_x()
-limit_x()
-x()
+#limit_x()
+#x()
