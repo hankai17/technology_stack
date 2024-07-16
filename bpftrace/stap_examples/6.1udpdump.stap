@@ -1,0 +1,18 @@
+#! /usr/bin/env stap
+
+# A UDP dump like example
+#   * sock - process id
+#   * size - size of udp packet
+
+probe begin, timer.s(3) {
+    ansi_clear_screen()
+    printf("--------------------------------------------\n")
+    printf("       Process name        size             \n")
+    printf("--------------------------------------------\n")
+}
+
+probe udp.recvmsg {
+    printf(" %15d %15d\n",
+        sock, size)
+}
+

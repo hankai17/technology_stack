@@ -1,0 +1,42 @@
+#!/usr/bin/env stap
+
+global count
+
+probe begin {
+    warn("Tracing SYN & ACK backlog queue overflows on the listening port 80...\n")
+}
+
+probe kernel.function("tcp_v4_conn_request") {
+    tcphdr = __get_skb_tcphdr($skb)
+    dport = __tcp_skb_dport(tcphdr)
+
+    if (dport == 80) {
+        syn_qlen = @cast($sk, "struct inet_connection_sock")->icsk_accept_queue->listen_opt->qlen
+        max_syn_qlen_log = @cast($sk, "struct inet_connection_sock")->icsk_accept_queue->listen_opt->max_qlen_log
+        max_syn_qlen = (2 << max_syn_qlen_log)
+
+        if (syn_qlen > max_syn_qlen) {
+            now = tz_ctime(gettimeofday_s())
+            printf("[%s] SYN queue is overflown: %d > %d\n", now, syn_qlen, max_syn_qlen)
+            count++
+        }
+
+        printf("syn queue: %d <= %d\n", qlen, max_qlen)
+
+        ack_backlog = $sk->sk_ack_backlog
+        max_ack_backlog = $sk->sk_max_ack_backlog
+
+        if (ack_backlog > max_ack_backlog) {
+            now = tz_ctime(gettimeofday_s())
+            printf("[%s] ACK backlog queue is overflown: %d > %d\n", now, ack_backlog, max_ack_backlog)
+            count++
+        }
+
+        printf("ACK backlog queue: %d <= %d\n", ack_backlog, max_ack_backlog)
+
+        if (count >= 10) {
+            exit()
+        }
+    }
+}
+

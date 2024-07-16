@@ -1,0 +1,13 @@
+##################usage#################
+# stap -c 'ls' syscalls.stap
+#
+
+probe syscall.* {
+    println(thread_indent(4), "->", probefunc())    
+}
+
+probe syscall.*.return {
+    println(thread_indent(-4), "<-", probefunc())    
+}
+
+# stap -c /usr/local/nginx/sbin/nginx syscalls.stap  > 1.log

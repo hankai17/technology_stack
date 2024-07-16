@@ -1,0 +1,59 @@
+#!/usr/bin/stap
+
+global groups
+
+probe begin {
+    printf("Collecting data... press Ctrl-C to stop.\n")
+}
+
+probe syscallgroup.io = syscall.open, syscall.close,
+                        syscall.read, syscall.write
+{ groupname = "io" }
+
+probe syscallgroup.process = syscall.fork, syscall.execve
+{ groupname = "process" }
+
+probe syscallgroup.*
+{ groups [execname() . "/" . groupname]++ }
+
+probe end {
+    foreach(eg+ in groups)
+        printf("%s: %d\n", eg, groups[eg])
+}
+
+/*
+(s_server)/io: 79872
+(s_server)/process: 192
+(sh)/io: 222
+(sh)/process: 1
+0anacron/io: 38
+0anacron/process: 2
+ModemManager/io: 12
+abrt-watch-log/io: 120
+accounts-daemon/io: 28
+audispd/io: 621
+auditd/io: 621
+avahi-daemon/io: 170
+awk/io: 178
+basename/io: 20
+bash/io: 19
+bash/process: 1
+boltd/io: 28
+cat/io: 14
+chronyd/io: 1
+crond/io: 1704
+crond/process: 6
+date/io: 42
+dbus-daemon/io: 114
+docker-containe/io: 1916
+docker-current/io: 45
+docker/io: 40
+docker/process: 1
+dockerd-current/io: 1456
+etcd/io: 25
+fuse mainloop/io: 4
+fwupd/io: 27
+gdbus/io: 3390
+geoclue/io: 163
+gmain/io: 2734
+*/

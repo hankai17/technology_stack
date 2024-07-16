@@ -1,0 +1,63 @@
+#!/usr/bin/env stap
+#
+######################################## 
+# sudo stap cswmon.stp 5
+
+global csw_count
+global idle_count
+
+probe scheduler.cpu_off {
+    csw_count[task_prev, task_next]++
+    idle_count+=idle
+}
+
+function fmt_task(task_prev, task_next) {
+    return sprintf("%s(%d)->%s(%d)",
+        task_execname(task_prev),
+        task_pid(task_prev),
+        task_execname(task_next),
+        task_pid(task_next))
+}
+
+function print_cswtop () {
+    printf ("%45s %10s\n", "Context switch", "COUNT")
+    foreach ([task_prev, task_next] in csw_count- limit 20) {
+        printf("%45s %10d\n", fmt_task(task_prev, task_next),
+            csw_count[task_prev, task_next])
+    }
+
+    printf("%45s %10d\n", "idle", idle_count)
+    delete csw_count
+    delete idle_count
+}
+
+probe timer.s($1) {
+    print_cswtop ()
+    printf("————————————————————–\n")
+}
+
+/*
+./cswmon.stap 5
+                               Context switch      COUNT
+                     etcd(3513)->swapper/1(0)        190
+                     swapper/1(0)->etcd(3513)         94
+              swapper/1(0)->xfsaild/dm-0(439)         68
+                     swapper/1(0)->etcd(3513)         65
+                     swapper/3(0)->etcd(3513)         63
+              xfsaild/dm-0(439)->swapper/1(0)         59
+                     etcd(3513)->swapper/3(0)         59
+                   swapper/2(0)->rcu_sched(9)         57
+                  swapper/0(0)->vmtoolsd(769)         53
+                  vmtoolsd(769)->swapper/0(0)         52
+                   rcu_sched(9)->swapper/2(0)         52
+                     swapper/3(0)->etcd(3513)         39
+                       etcd(3513)->etcd(3513)         39
+                     etcd(3513)->swapper/3(0)         35
+                 swapper/0(0)->vmtoolsd(3110)         33
+                 vmtoolsd(3110)->swapper/0(0)         33
+                   swapper/1(0)->rcu_sched(9)         31
+                   rcu_sched(9)->swapper/1(0)         31
+           swapper/1(0)->systemd-journal(524)         31
+                     swapper/1(0)->etcd(3513)         30
+                                         idle       1026
+*/

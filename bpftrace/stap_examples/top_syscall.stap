@@ -1,0 +1,51 @@
+#! /usr/bin/env stap
+#
+# This script continuously lists the top 20 systemcalls in the interval 
+# 5 seconds
+#
+
+global syscalls_count
+
+probe syscall.* {
+    syscalls_count[name]++
+}
+
+function print_systop () {
+    printf ("%25s %10s\n", "SYSCALL", "COUNT")
+    foreach (syscall in syscalls_count- limit 20) {
+      printf("%25s %10d\n", syscall, syscalls_count[syscall])
+    }
+    delete syscalls_count
+}
+
+probe timer.s(5) {
+    print_systop ()
+    printf("--------------------------------------------------------------\n")
+}
+
+/*
+./topsys.stap  --skip-badvars
+--------------------------------------------------------------
+                  SYSCALL      COUNT
+                    times        440
+                    futex        433
+                     read        239
+                     poll        154
+                    ppoll        105
+               epoll_wait         73
+                  recvmsg         63
+                   getpid         57
+                    close         54
+                   openat         52
+                    write         32
+                    fcntl         27
+                 pselect6         12
+        inotify_add_watch         11
+                   gettid         11
+                  sendmsg          8
+                     stat          6
+                epoll_ctl          6
+                nanosleep          5
+                 recvmmsg          5
+--------------------------------------------------------------
+*/

@@ -1,0 +1,80 @@
+#!/usr/bin/env stap
+
+global ifxmit, ifrecv
+global ifmerged
+
+probe netdev.transmit
+{
+    ifxmit[pid(), dev_name, execname(), uid()] <<< length
+}
+
+probe netdev.receive
+{
+    ifrecv[pid(), dev_name, execname(), uid()] <<< length
+}
+
+/*
+  PID   UID DEV     XMIT_PK RECV_PK  XMIT_B  RECV_B COMMAND        
+ 3513     0 lo           13       0      1K       0 etcd           
+    0     0 ens33         0       8       0     516 swapper/3      
+71200    99 lo            8       0     516       0 openresty      
+114659     0 lo            2       0     516       0 tsar           
+    0     0 lo            1       0     516       0 swapper/1      
+96701     0 ens33         1       0     516       0 sshd           
+    0     0 lo            1       0     516       0 swapper/3      
+*/
+
+function print_activity()
+{
+    ansi_clear_screen()
+    printf("%5s %5s %-7s %7s %7s %7s %7s %-15s\n",
+            "PID", "UID", "DEV", "XMIT_PK", "RECV_PK",
+            "XMIT_B", "RECV_B", "COMMAND")
+
+    foreach ([pid, dev, exec, uid] in ifrecv) {
+        ifmerged[pid, dev, exec, uid] += @count(ifrecv[pid,dev,exec,uid]);
+    }
+    foreach ([pid, dev, exec, uid] in ifxmit) {
+        ifmerged[pid, dev, exec, uid] += @count(ifxmit[pid,dev,exec,uid]);
+    }
+    foreach ([pid, dev, exec, uid] in ifmerged-) {
+        n_xmit = @count(ifxmit[pid, dev, exec, uid])
+        n_recv = @count(ifrecv[pid, dev, exec, uid])
+        if(n_xmit) {
+            t_xmit = @sum(ifxmit[pid, dev, exec, uid]);
+            if(t_xmit > 1024){
+                t_xmit = t_xmit / 1024;
+                str_txmit = sprint(t_xmit) . "K";
+            } else {
+                str_txmit = sprint(t_recv);
+            }
+        } else {
+            str_txmit = "0";
+        }
+        if(n_recv) {
+            t_recv = @sum(ifrecv[pid, dev, exec, uid]);
+            if(t_recv > 1024){
+                t_recv = t_recv / 1024;
+                str_trecv = sprint(t_recv) . "K";
+            } else {
+                str_trecv = sprint(t_recv);
+            }
+        } else {
+            str_trecv = "0";
+        }
+        printf("%5d %5d %-7s %7d %7d %7s %7s %-15s\n",
+            pid, uid, dev, n_xmit, n_recv, str_txmit, str_trecv, exec)
+    }
+
+    print("\n")
+
+    delete ifxmit
+    delete ifrecv
+    delete ifmerged
+}
+
+probe timer.ms(5000), end, error
+{
+    print_activity()
+}
+
