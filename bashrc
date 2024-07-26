@@ -89,7 +89,6 @@ export GOPATH=/root/go_pro
 export PATH=$PATH:$GOPATH:/usr/local/go/bin
 #go version
 
-#post 0x504f5354
 #find . -executable -exec rm -v {} \;
 #tcpdump -i any -nn 'host 本机ip'
 #tcpdump -i any -nnA '!port 22' 抓非22
@@ -136,6 +135,8 @@ export PATH=$PATH:$GOPATH:/usr/local/go/bin
 #tcpdump -Xnns 0 -i any port 5005 赛赛看包很溜
 #tcpdump port 80 -i lo -Xnns 0 -r 1.cap
 #tcpdump -i any dst host 110.43.131.38 and '(tcp[13] == 2 or (tcp[13] & 1 != 0) or (tcp[13] & 4 != 0))' -nn  #抓syn fin rst包
+#tcpdump -i any 'tcp port 9006  and tcp[((tcp[12:1] & 0xf0) >> 2):4] == 0x504f5354' -w post.pcap #抓post
+#0 * * * * /usr/bin/killall tcpdump; /usr/sbin/tcpdump  -i any 'tcp port 9006  and tcp[((tcp[12:1] & 0xf0) >> 2):4] == 0x504f5354' -w /root/file/post/$(date +"\%Y-\%m-\%d_\%H").pcap >> /tmp/1.log & 2>&1 每小时抓包
 #ll /home*/ppcache_dat/07/A0/07E3D78F8ED1E32E2A318DBA8F909A69B79805A0* 
 # hexdump -C /home6/ppcache_dat/07/A0/07E3D78F8ED1E32E2A318DBA8F909A69B79805A0.info  
 #date -d @1566760483
