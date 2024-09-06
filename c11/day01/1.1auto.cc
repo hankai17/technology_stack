@@ -1,9 +1,10 @@
 #include <iostream>
 
-void func(auto a = 1);  //auto不能用于函数参数
+void func(auto a = 1);      // auto不能用于函数参数 
+                            // c11之后的版本可以用于函数参数
 
 struct Foo {
-  auto var1_ = 0;  //auto不能用于非静态成员变量
+  auto var1_ = 0;           // auto不能用于非静态成员变量
   static const auto var2_ = 0;
 };
 
@@ -12,16 +13,17 @@ struct Bar {};
 
 int main(void) {
   Bar<int> bar;
-  Bar<auto> bb = bar;  //auto无法推导出模板参数
+  Bar<auto> bb = bar;       // auto无法推导出模板参数
 
   int arr[10] = {0};
-  auto rr[10] = arr;  //auto无法定义数组
-  auto aa = arr;  //aa->int* 没问题
+  auto rr[10] = arr;        // auto无法定义数组
+  auto aa = arr;            // aa->int* 没问题
   return 0;
 }
 
 /* 
-auto是类型指示符(type-specifier) 而非存储类型指示符(storage-class-specifiers) eg:static register mutable
+auto是类型指示符(type-specifier 翻译成类型占位符号比较好 因为其最终需由编译器替换成具体的类型)
+而非存储类型指示符(storage-class-specifiers) eg:static register mutable
 cv限定符:(cv-qualifier) const_volatile
 
 auto会把const 引用属性去掉  eg:auto f = e;(其中e是 int&类型的) 但推导出的f只是int类型的

@@ -72,4 +72,4 @@ fn main() {
 }
 
 // https://course.rs/advance/smart-pointer/cell-refcell.html
-
+// https://stackoverflow.com/questions/72379106/what-are-the-differences-between-cell-refcell-and-unsafecell

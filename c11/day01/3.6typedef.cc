@@ -1,7 +1,7 @@
-typedef unsigned int uint_t; //即常用法
+typedef unsigned int uint_t; // 即常用法
 
 void func(unsigned int);
-void func(uint_t); //将会与上函数重复
+void func(uint_t); // 将会与上函数重复
 
 typedef最重要的是无法定义一个模板 
 比如 
