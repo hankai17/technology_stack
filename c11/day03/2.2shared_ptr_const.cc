@@ -3,14 +3,14 @@
 
 class Base
 {
-public:
-    virtual ~Base() {}
+    public:
+        virtual ~Base() {}
 };
 
 class Derived : public Base
 {
-public:
-    ~Derived() {}
+    public:
+        ~Derived() {}
 };
 
 void processSpBase(const std::shared_ptr<Base> &p)
@@ -26,4 +26,5 @@ int main()
 
     return 0;
 }
+
 //https://blog.csdn.net/imred/article/details/88729688
