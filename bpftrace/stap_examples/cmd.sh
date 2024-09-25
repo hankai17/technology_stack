@@ -16,3 +16,7 @@ stap -l 'kernel.trace("*")'
 stap -l 'syscall.*'
 stap -l 'vfs.*'
 
+#每行都捕获了哪些变量
+stap -L 'kernel.statement("tcp_write_xmit@*:*")'
+#stap -L 'kernel.statement("cubictcp_cong_avoid")' #查看一些信息
+#kernel.statement 的行数 可以随意更改
