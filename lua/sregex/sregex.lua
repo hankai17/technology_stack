@@ -155,7 +155,7 @@ function _M.program_dump(prog)
     return sregex.sre_program_dump(prog)
 end
 
------------------------------------------------
+--pike
 function _M.vm_pike_create_ctx(pool, prog, ncaps)
     local ovecsize = 2 * (ncaps + 1)
     local ovector = ffi_new('sre_int_t[?]', ovecsize)
@@ -173,21 +173,17 @@ function _M.vm_pike_exec(ctx, data, mode)
     local ret = sregex.sre_vm_pike_exec(ctx, input, len, mode, pending_matched)
     local done = false
     if ret == sregex.SRE_OK then
-        done = false                            -- try it again
+        done = false
         return true, done, pending_matched
     end
     if ret == sregex.SRE_AGAIN then
         done = true
         return true, done, pending_matched
     end
-    if pending then
-        print("pending: ", pending[0])
-    end
     return false
 end
 
------------------------------------------------
---[[
+--thompson
 function _M.vm_thompson_create_ctx(pool, prog)
     return sregex.sre_vm_thompson_create_ctx(pool, prog)
 end
@@ -195,29 +191,38 @@ end
 function _M.vm_thompson_exec(ctx, data, mode)
     local input = ffi_new('sre_char[?]', #data, data)
     local len = ffi_sizeof(input)
-    sregex.sre_vm_thompson_exec(ctx, input, len, mode)
-    -- TODO
+    local ret = sregex.sre_vm_thompson_exec(ctx, input, len, mode)
+    local done = false
+    if ret == sregex.SRE_OK then
+        done = false
+        return true, done
+    end
+    if ret == sregex.SRE_AGAIN then
+        done = true
+        return true, done
+    end
+    return false
 end
 
 function _M.vm_thompson_jit_compile(pool, prog)
-    local pcode_ptr = ffi_new('sre_vm_thompson_code_t*[1]')
-    local r = clib.sre_vm_thompson_jit_compile(pool, prog, pcode_ptr)
-    if r == _M.OK then
-        return pcode_ptr[0], nil
-    elseif r == _M.DECLINED then
+    local code = ffi_new('sre_vm_thompson_code_t*[1]')
+    local r = sregex.sre_vm_thompson_jit_compile(pool, prog, code)
+    if r == sregex.SRE_OK then
+        return code[0], nil
+    elseif r == sregex.SRE_DECLINED then
         return nil, 'arch not supported'
-    elseif r == _M.ERROR then
+    elseif r == sregex.SRE_ERROR then
         return nil, 'fatal error'
     end
     return nil, 'unknown error'
 end
 
 function _M.vm_thompson_jit_get_handler(code)
-    return clib.sre_vm_thompson_jit_get_handler(code)
+    return sregex.sre_vm_thompson_jit_get_handler(code)
 end
 
 function _M.vm_thompson_jit_create_ctx(pool, prog)
-    return clib.sre_vm_thompson_jit_create_ctx(pool, prog)
+    return sregex.sre_vm_thompson_jit_create_ctx(pool, prog)
 end
 
 function _M.vm_thompson_jit_exec(handler, ctx, data, mode)
@@ -227,8 +232,8 @@ function _M.vm_thompson_jit_exec(handler, ctx, data, mode)
 end
 
 function _M.vm_thompson_jit_free(code)
-    return clib.sre_vm_thompson_jit_free(code)
+    return sregex.sre_vm_thompson_jit_free(code)
 end
-]]--
 
 return _M
+
