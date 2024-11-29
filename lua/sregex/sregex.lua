@@ -128,7 +128,7 @@ function _M.regex_parse(pool, pattern, flags)
 end
 
 function _M.regex_parse_multi(pool, patterns, multi_flags)
-    local regs = ffi_new('const char*[?]', #patterns, patterns)
+    local regs = ffi_new('const char*[?]', #patterns + 1, patterns)
     local regs = ffi_cast('sre_char**', regs)
     local ncaps = ffi_new('sre_uint_t[1]')
     local flags = ffi_new('int[?]', #multi_flags, multi_flags)
