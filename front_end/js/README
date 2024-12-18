@@ -1,0 +1,3 @@
+npm config set registry https://mirrors.huaweicloud.com/repository/npm/
+npm install webpack webpack-cli --save-dev node-rsa
+npx webpack --config webpack.config.js
