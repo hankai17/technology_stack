@@ -1,0 +1,71 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9ec379d..09a19d0 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -107,8 +107,11 @@ if(NOT (CMAKE_C_COMPILER_ID MATCHES "MSVC" OR CMAKE_CXX_COMPILER_ID MATCHES "MSV
+     set(CMAKE_C_FLAGS_OPTION "-Werror -Wno-unused -Wno-pointer-sign -Wno-format-security ")
+ endif()
+ 
++#set(CMAKE_C_FLAGS_OPTION "-Wno-error=deprecated-declarations -Wno-deprecated-declarations -Wdangling-pointer=1 -Wno-error=stringop-truncation  -Wno-unused")
++set(CMAKE_C_FLAGS_OPTION "-Wno-error=deprecated-declarations -Wno-deprecated-declarations -Wno-error=stringop-truncation  -Wno-unused")
++
+ # C_FLAGS
+-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O2 -std=gnu11 -Wall ${CMAKE_C_FLAGS_OPTION} -DNDEBUG_PRINT -DNPRINT_MALLOC ")
++set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0 -std=gnu11 -Wall ${CMAKE_C_FLAGS_OPTION} -DNDEBUG_PRINT -DNPRINT_MALLOC ")
+ set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS} -g -O0 -std=gnu11 -Wall ${CMAKE_C_FLAGS_OPTION} -DNDEBUG_PRINT -DNPRINT_MALLOC -DXQC_DEBUG ")
+ 
+ 
+diff --git a/include/xquic/xqc_configure.h b/include/xquic/xqc_configure.h
+index fa13e49..b53d75e 100644
+--- a/include/xquic/xqc_configure.h
++++ b/include/xquic/xqc_configure.h
+@@ -2,10 +2,14 @@
+ #define xquic_VERSION_MAJOR 0
+ #define xquic_VERSION_MINOR 1
+ 
+-/* #undef XQC_ENABLE_BBR2 */
+-/* #undef XQC_ENABLE_RENO */
++#define XQC_ENABLE_BBR2
++#define XQC_ENABLE_RENO
+ /* #undef XQC_ENABLE_COPA */
+ /* #undef XQC_ENABLE_UNLIMITED */
+ /* #undef XQC_ENABLE_MP_INTEROP */
+ /* #undef XQC_NO_PID_PACKET_PROCESS */
+ /* #undef XQC_PROTECT_POOL_MEM */
++/* #undef XQC_COMPAT_DUPLICATE */
++/* #undef XQC_ENABLE_FEC */
++/* #undef XQC_ENABLE_XOR */
++/* #undef XQC_ENABLE_RSC */
+diff --git a/src/transport/xqc_frame.c b/src/transport/xqc_frame.c
+index 4aff7fb..ad66152 100644
+--- a/src/transport/xqc_frame.c
++++ b/src/transport/xqc_frame.c
+@@ -1839,4 +1839,4 @@ xqc_process_repair_frame(xqc_connection_t *conn, xqc_packet_in_t *packet_in)
+     /* if there's error, just ignore fec module */
+     return XQC_OK;
+ }
+-#endif
+\ No newline at end of file
++#endif
+diff --git a/src/transport/xqc_multipath.c b/src/transport/xqc_multipath.c
+index 0d1136c..63100ac 100644
+--- a/src/transport/xqc_multipath.c
++++ b/src/transport/xqc_multipath.c
+@@ -1496,4 +1496,4 @@ xqc_path_recent_loss_rate(xqc_path_ctx_t *path)
+     }
+ 
+     return xqc_max(loss_rate0, loss_rate1);
+-}
+\ No newline at end of file
++}
+diff --git a/src/transport/xqc_recv_record.c b/src/transport/xqc_recv_record.c
+index 525fde8..55d37c7 100644
+--- a/src/transport/xqc_recv_record.c
++++ b/src/transport/xqc_recv_record.c
+@@ -390,4 +390,4 @@ xqc_ack_sent_record_on_ack(xqc_ack_sent_record_t *record, xqc_ack_info_t *ack_in
+         }
+     }
+     return 0;
+-}
+\ No newline at end of file
++}

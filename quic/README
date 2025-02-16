@@ -1,0 +1,195 @@
+                                quic-fiber
+xqc_connection_t    <--->       session层
+    xqc_send_ctl_t  <--->          m_sent_packet_handler
+xqc_stream_t        <--->       stream层
+xqc_stream_frame_t  <--->       frame帧
+
+
+xqc_engine_main_logic
+    xqc_engine_process_conn
+        xqc_conn_process_packet
+            xqc_packet_process_single
+                xqc_packet_decrypt_single
+                    xqc_packet_decrypt
+                    xqc_process_frames
+            xqc_conn_on_pkt_processed
+                xqc_conn_record_single
+                    xqc_maybe_should_ack
+
+xqc_stream_recv                                 上层消费接口
+    xqc_stream_do_recv_flow_ctl                 流控
+        xqc_write_max_stream_data_to_packet
+
+xqc_write_stream_frame_to_packet
+    xqc_write_max_stream_data_to_packet
+
+
+
+
+
+
+1. path是什么时候被初始化的
+    xqc_path_create
+    path是c级别的
+    path的两个ctl 用于拥塞控制层
+
+    没有处理诱洞包? 不在xqc_recv_record_add里 好像在外层
+
+2. 流控是怎么处理的
+
+typedef enum ssl_encryption_level_t {
+    ssl_encryption_initial = 0,
+    ssl_encryption_early_data,
+    ssl_encryption_handshake,
+    ssl_encryption_application
+} OSSL_ENCRYPTION_LEVEL;
+
+typedef enum xqc_encrypt_level_s {
+    XQC_ENC_LEV_INIT,
+    XQC_ENC_LEV_0RTT,
+    XQC_ENC_LEV_HSK,
+    XQC_ENC_LEV_1RTT,
+    XQC_ENC_LEV_MAX,
+} xqc_encrypt_level_t;
+
+
+3. 握手细节
+    xqc_tls_ctx_create时 会设置tls层的各种回调 eg: alpn/session/keylog
+
+    Client:
+        xqc_client_connect
+            生产scid
+            xqc_client_create_connection
+                xqc_conn_create                     ---> 业务层的connection初始化 非常丰富
+                xqc_create_crypto_stream            ---> 基于conn 创建第一条stream  // stream的回调为crypto_stream_callback
+                xqc_client_create_tls               ---> 基于引擎的tls_ctx创建 tls实例
+                    xqc_tls_init                    ---> 开始client_hello握手
+                        xqc_crypto_create           ---> 创建init阶段的crypto(加密套件)
+                        xqc_tls_init_client
+                            xqc_tls_derive_and_install_initial_keys
+                                派生出 tx/rx key
+                            xqc_tls_do_handshake    ---> SSL_do_handshake 
+                                回调xqc_tls_add_handshake_data->xqc_conn_tls_crypto_data_cb(将ssl库底层裸数据拷贝到上层 相应level的队列中 eg: conn->initial/hsk/application(1rtt)_crypto_data_list) 这里仅是init level   hankai生产
+                                回调xqc_tls_set_write_secret 里面创建(xqc_crypto_create) ssl_encryption_early_data阶段的加密套件 安装ssl库底层传过来的read_key
+            conn_create_notify                      ---> 创建stream
+                尝试发一下stream
+                构造long header 
+            xqc_engine_main_logic_internal          ---> "抽一下" 主引擎
+                    
+
+
+
+3.1 ssl库是怎么通过udp socket发送出去的? 是boring ssl库底层会udp发出去? 阻塞了怎么办?
+    跟ngx1.16调用完SSL_do_handshake不一样 这里调用后ssl底层不会发包
+    xqc_engine_main_logic                           ---> 组/发包流程
+        xqc_engine_process_conn
+            xqc_process_crypto_write_streams        ---> 遍历 conn的init/0rtt/hk/1rtt阶段 各自的crypto_stream的队列 组成udp包
+                xqc_crypto_stream_on_write
+                    xqc_crypto_stream_send          ---> 遍历该队列中每个裸数据包 每个数据包均分配一个packet_out结构  ---> server端发的首包也是init包 server端发的第2/3/4/5个包是hk包
+                        xqc_crypto_frame_header_size    ---> header_size 4字节
+                        xqc_write_new_packet
+                            xqc_write_packet_header
+                                xqc_gen_long_packet_header  ---> long_packet39字节 此时payload中是39字节( 33 + 2 + pn_len(4))
+                        xqc_gen_crypto_frame    ---> 构造CRYPTO帧 571(567 + 4)字节 并放入payload(从39字节处) 此时payload中是610(39(头) + 571(crypto帧))字节
+                        xqc_send_queue_move_to_high_pri ---> 将该packet_out节点 排入到该conn的conn_send_queue  hankai消费1 ---> server端: packet_out(init) -> packet_out(hk){4}
+        xqc_conn_schedule_packets_to_paths
+            xqc_conn_schedule_packets               ---> 将conn_send_queue中的包 排入path->path_schedule_buf[XQC_SEND_TYPE_NORMAL_HIGH_PRI]中 hankai消费2  假设跟hankai消费1队列保持一致
+            path机制 TODO
+        xqc_conn_send_packets
+            xqc_path_send_packets                   ---> 从path_schedule里依次取出每个packet_out ---> server端依次构造init首包(用iv加密payload) hK包(用hk阶段的iv加密payload) hk包 hk包 hk包 (注意每构造一个包立即发送出去)
+                xqc_path_send_one_packet 
+                    xqc_process_packet_with_pn
+                        xqc_enc_packet_with_pn      ---> 首包必须padding到1200字节
+                            refresh length          ---> 33 + 2 | 4 + 1161 + 16  即header中的length字段最终为1181
+                            xqc_tls_encrypt_payload
+                                xqc_ossl_aead_encrypt   ---> 只对1161的payload进行加密 加密结束后传出payload的长度为1161 + 16 = 1177字节
+                            xqc_tls_encrypt_header
+                                根据加密后的payload 产生mask 用该mask加密header头的首字节 以及 header头中的pn
+                            header/payload加密结束  ---> mask(35字节头) | mask(4字节pn) + crypto(1161字节crypto帧) + tag(16)  最终这个packet大小为1216字节
+                        xqc_send_packet_with_pn
+                            sendto                  ---> 系统调用(上层注册)
+                            udp发包一旦阻塞则不做处理
+    可见init level是通过类似bio的机制 从ssl层读取包内容
+    
+3.1.1 Server端收包细节
+    xqc_engine_packet_process
+        xqc_packet_parse_cid                        ---> 解析处dcid/scid
+        xqc_engine_conns_hash_find(scid)
+        xqc_conn_server_create                      ---> 没找到scid 则创建c
+        xqc_conn_process_packet
+            xqc_packet_process_single
+                xqc_packet_parse_single
+                    xqc_packet_parse_long_header
+                        xqc_conn_version_check
+                            xqc_tls_init
+                                xqc_crypto_create   ---> 创建加密套件
+                                xqc_tls_init_server ---> xqc_tls_derive_and_install_initial_keys
+                                    xqc_hkdf_extract    ---> dcid跟密钥有何关系?
+                        xqc_packet_parse_initial
+                xqc_packet_decrypt_single
+                    xqc_packet_decrypt
+                        xqc_tls_decrypt_header      ---> unmask(35字节头中的首字节) unmask(pn)
+                        xqc_tls_decrypt_payload     ---> 根据dcid产生的key(iv) 解密payload
+                            xqc_ossl_aead_decrypt
+                    xqc_process_frames
+                        xqc_process_crypto_frame    ---> 分配stream_frame/以及该conn的init阶段的crypto_stream(很重的一个结构) 并解析client hello 得到567字节长度内容 将stream_frame排入该crypto_stream中
+                        xqc_read_crypto_stream      ---> stream_frame排序? 以帧为单位进行解密   // client hello如果非常大怎么办?
+                            xqc_tls_process_crypto_data
+                                SSL_provide_quic_data   ---> tls库函数 拷贝上层数据到ssl库中
+                                xqc_tls_do_handshake    ---> SSL_do_handshake 
+                                    xqc_tls_add_handshake_data->xqc_conn_tls_crypto_data_cb(将ssl库底层数据(123字节)拷贝到上层 init level的队列中)   ---> ServerHello
+                                    xqc_tls_add_handshake_data->xqc_conn_tls_crypto_data_cb(将ssl库底层数据(108字节)拷贝到上层 hk level的队列中)     ---> 241130 这个包里面是什么内容? 怎么看? 调ssl库? 看一下tongsuo的测试案例
+                                    xqc_tls_add_handshake_data->xqc_conn_tls_crypto_data_cb(将ssl库底层数据(804字节)拷贝到上层 hk level的队列中)
+                                    xqc_tls_add_handshake_data->xqc_conn_tls_crypto_data_cb(将ssl库底层数据(264字节)拷贝到上层 hk level的队列中)
+                                    xqc_tls_add_handshake_data->xqc_conn_tls_crypto_data_cb(将ssl库底层数据(36字节)拷贝到上层 hk level的队列中)
+                                    xqc_tls_set_read_secret ---> ssl库底层 通知上层hk阶段开始
+                                        xqc_crypto_create   ---> 创建hk阶段加密套件
+                                            xqc_crypto_derive_keys  ---> 给加密套件 安装ssl库底层传过来的read_key 根据这个read_key生产hk阶段读端3剑客(key/iv/hp)  ---> 241130 假设这个read_key是根据客户端init包里的key_shared(A g p) 计算出的本端的私钥b (\/)
+                                    xqc_tls_set_read_secret ---> ssl库底层 通知上层app(1rtt)阶段开始
+                                        xqc_crypto_create   ---> 创建app(1rtt)阶段加密套件
+                                            xqc_crypto_derive_keys  ---> 给加密套件 安装ssl库底层传过来的read_key 根据这个read_key生产app(1rtt)阶段读端3剑客(key/iv/hp) ---> 241130 这个read_key是根据什么计算出来的? 如果这个key是server端主动产生的 那么它是放到了(hk){4}里 发到client吗?
+                                SSL_process_quic_post_handshake
+                        xqc_create_crypto_stream    ---> 创建该conn的hk阶段的crypto_stream
+
+    xqc_engine_main_logic                           ---> 组/发包流程 与上基本一致 TODO
+
+3.1.1.1 HMAC, HKDF:https://suntus.github.io/2019/05/09/HKDF%E7%AE%97%E6%B3%95/
+    xqc_tls_derive_and_install_initial_keys
+        xqc_crypto_derive_initial_secret    ---> 从dcid派生(hmac: 包括extract + expand*2)出来一对(分别用于写/读)随机的key
+        xqc_crypto_derive_keys(key, WR)
+            xqc_crypto_derive_packet_protection_key ---> 根据key 再次expand得到key1 存入ckm
+            xqc_crypto_derive_packet_protection_iv  ---> 根据key 再次expand得到iv
+            xqc_crypto_derive_header_protection_key ---> 根据key 再次expand得到hp
+        xqc_crypto_derive_keys(key, RD)
+    payload的加解密都是dcid派生出来的key(iv) 本质是个hash(dcid)函数的对称加密
+
+3.1.1.2 Server端解密到首包后 做什么操作?
+    server端的init的三剑客(key/iv/hp) 与 客户端一致 因为都是从同一个dcid派生出来的
+    server端的hk/1rtt(app) 的三剑客的派生源头是由server端ssl库传出的read_key
+    server端的hk/1rtt(app)的 三剑客是如何传给client的?
+
+3.1.2 是哪种模型 eg:ngx的上层SSL_read/write驱动模型 还是 纯底层驱动模型?
+3.1.3 发收的首包结构 以及加密细节
+3.2 Client端收包(Server端发的首(init)包 4个hk包)细节
+    如何分发给conn 
+        hash查找
+    如何验证nonce时效性? 
+        没有验证 直接解包 构造crypto_frame 找到该conn的init阶段的crypto_stream 跟Server端收包细节基本一致 会把解出来的数据拷贝的ssl库底层
+        接下来也是三剑客:
+            a)拷贝(SSL_provide_quic_data)到ssl库中
+            b)然后调用SSL_do_handshake
+            c)回调上层xqc_tls_set_read_secret 直接xqc_crypto_create(创建hk阶段加密套件) 并安装ssl库底层传过来的read_key ...
+        比较奇怪的是 ssl库触发的第一次回调(收到init包) 就直接创建hk阶段的加密套件 ---> 也就是说init包最后会协商出hk阶段的对称密钥
+
+        c/s端加解密套件 是怎么对应起来的? DHCE?
+
+        最后一个三剑客创建 app级别的加密套件 
+            
+    
+
+
+
+
+
+
+
