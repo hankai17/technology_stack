@@ -186,6 +186,37 @@ typedef enum xqc_encrypt_level_s {
         最后一个三剑客创建 app级别的加密套件 
             
 3.3 cid变化过程    
+4.0 0-RTT
+    0-RTT一般是新建链接时 产生新的id(packet级别) 导致会hash到错误的rs(这个新建链接之前的那个父链接所hash的rs)
+    客户端第一次发送的0-RTT包与第一个Initial包需要填写相同的DCID和SCID值
+
+4.1 链接迁移
+        c               s
+    scid,dcid ---->
+               <--- path_change
+                    new_con_id(scid1)
+    scid1,dcid --->
+
+
+        c                   lb              s
+    scid,dcid ----->
+            <---new_con_id(scid1+route)---path_change
+    scid1,dcid ---->
+    如果密钥共享 scid1可由lb生成
+    
+    4层hash(id)  7层内核hash(id)到某个worker
+
+
+    https://datatracker.ietf.org/doc/draft-ietf-quic-load-balancers/
+    https://datatracker.ietf.org/doc/html/rfc9000#connection-id 
+    https://github.com/alibaba/xquic/blob/main/docs/translation/rfc9000-transport-zh.md
+
+5.0 无损变更
+    内核session表: hash(id) -> worker进程id
+    reload后 标记worker进程id为reload态
+    udp高并发(connect) 无法使用gso?
+6.0 QUIC-LB
+    Server端 产生的connection IDs中包含有 (本Server的)路由信息
 
 
 
@@ -193,3 +224,5 @@ typedef enum xqc_encrypt_level_s {
 
 
 
+https://datatracker.ietf.org/doc/draft-ietf-quic-load-balancers/
+https://github.com/alibaba/xquic/blob/main/docs/translation/rfc9000-transport-zh.md
