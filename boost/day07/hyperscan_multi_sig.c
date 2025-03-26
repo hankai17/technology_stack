@@ -15,8 +15,10 @@ int eventHandler(unsigned int id, unsigned long long from,
 
 #define PATTERN_COUNT 1000
 #define TEST_COUNT 1
-const char *str = "User-Agent: <script>alert(12345)</script>";
-//const char *str = "This is a test string";
+#define COMPILE_RULE_COUNT 20
+
+//const char *str = "User-Agent: <script>alert(12345)</script>";
+const char *str = "This is a test string";
 
 int test1()
 {
@@ -56,8 +58,8 @@ int test1()
             return 1;
         }
         i++;
-        if (i == 60) {
-            //break;
+        if (i == COMPILE_RULE_COUNT) {
+            break;
         }
     }
     fclose(fp);
@@ -202,9 +204,13 @@ int test2()
         } 
         dbs[i] = db;
         i++;
+        if (i == COMPILE_RULE_COUNT) {
+            break;
+        }
     }
     fclose(fp);
     printf("i: %d\n", i);
+    int rule_count = i;
 
     // The string to search for matches in
 
@@ -214,10 +220,10 @@ int test2()
     // Search for matches in the string
     i = 0;
     while (i < 10000 * TEST_COUNT) {
-        int rule_count = 0;
         int j = 0;
-        for (j = 0; j < 1024; j++) {
-            struct h_db* db = dbs[j];
+        for (j = 0; j < 1; j++) {
+            //struct h_db* db = dbs[j];
+            struct h_db* db = dbs[0];
             if (db == NULL) {
                 break;
             }

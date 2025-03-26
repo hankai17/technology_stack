@@ -30,4 +30,7 @@ func main() {
     lock.Unlock() //ok
 }
 
+// 接口实现继承 跟c++基本一致
+// 组合实现继承 更加灵活 https://www.zhihu.com/question/511958588/answer/3137705299
 
+// https://www.cnblogs.com/pluse/p/7655977.html

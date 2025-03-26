@@ -173,7 +173,7 @@ class State {
     bool IsEnd() const { return is_end; };
 };
 
-class NfaState : public State {
+class NfaState : public State { // NFA可以添加空边
    public:
     // Set of NfaState pointers.
     typedef std::set<std::shared_ptr<NfaState>, PtrCmp> Set;
@@ -201,14 +201,14 @@ class NfaState : public State {
     bool AcceptC(C c) const { return transitions.find(c) != transitions.end(); }
 
    private:
-    Table transitions;
+    Table transitions;      // 同一个输入符号下 NFA 状态目标状态可能有多个
 };
 
 class Nfa {
    public:
     std::shared_ptr<NfaState> start = nullptr;
     std::shared_ptr<NfaState> end = nullptr;
-    Nfa(const std::shared_ptr<NfaState>& start,
+    Nfa(const std::shared_ptr<NfaState>& start, // 一个起始态 一个终止态
         const std::shared_ptr<NfaState>& end)
         : start(start), end(end){};
 };
@@ -491,7 +491,10 @@ class DfaState : public State {
     typedef std::set<std::shared_ptr<DfaState>, State::PtrCmp> Set;
 
     // 非空边跳转表: Char => DfaState pointer.
-    typedef std::unordered_map<C, std::shared_ptr<DfaState>> Table;
+    typedef std::unordered_map<C, std::shared_ptr<DfaState>> Table; // 同一个输入符号下 可能的目标跳转状态最多只有一个
+                                                                    // 一个状态可到达的所有状态都加入一个集合 作为DFA中的一个新状态
+                                                                    // 存在空边的情况下 不断沿着空边把途经状态也加入这个集合
+                                                                    // NFA 总可以转化为一个与其能力等价的 DFA
 
     DfaState(int id, bool is_end) : State(id, is_end){};
 
@@ -518,7 +521,7 @@ class DfaState : public State {
 class Dfa {
    public:
     std::shared_ptr<DfaState> start = nullptr;
-    DfaState::Set states;  // 状态集合
+    DfaState::Set states;  // 状态集合  // 起始状态只有一个 终态可以有多个
 
     Dfa(std::shared_ptr<DfaState> start) : start(start){};
 
