@@ -58,7 +58,7 @@ typedef enum xqc_encrypt_level_s {
 
     Client:
         xqc_client_connect
-            生产scid
+            生产scid dcid
             xqc_client_create_connection
                 xqc_conn_create                     ---> 业务层的connection初始化 非常丰富
                 xqc_create_crypto_stream            ---> 基于conn 创建第一条stream  // stream的回调为crypto_stream_callback
@@ -113,7 +113,7 @@ typedef enum xqc_encrypt_level_s {
     
 3.1.1 Server端收包细节
     xqc_engine_packet_process
-        xqc_packet_parse_cid                        ---> 解析处dcid/scid
+        xqc_packet_parse_cid                        ---> 解析处dcid跟scid
         xqc_engine_conns_hash_find(scid)
         xqc_conn_server_create                      ---> 没找到scid 则创建c
         xqc_conn_process_packet
@@ -123,7 +123,7 @@ typedef enum xqc_encrypt_level_s {
                         xqc_conn_version_check
                             xqc_tls_init
                                 xqc_crypto_create   ---> 创建加密套件
-                                xqc_tls_init_server ---> xqc_tls_derive_and_install_initial_keys
+                                xqc_tls_init_server ---> xqc_tls_derive_and_install_initial_keys 安装的是客户端包里的dcid(跟客户端安装的一样)
                                     xqc_hkdf_extract    ---> dcid跟密钥有何关系?
                         xqc_packet_parse_initial
                 xqc_packet_decrypt_single
@@ -186,6 +186,16 @@ typedef enum xqc_encrypt_level_s {
         最后一个三剑客创建 app级别的加密套件 
             
 3.3 cid变化过程    
+    c端产生 scid dcid
+    s端一般不做操作 但tengine中收到后会重置dcid(xqc_conn_server_create:xqc_generate_cid(cid_negotiate)调用上层回调 重新生成)  为何?
+    即:
+        <scid dcid> 首先根据dcid hash路由到某个worker   --- 因为这个dcid是客户端生成的 不符合"规范" 所以最终会随机路由到某个worker
+        某个worker收到这个包<scid dcid>后 重置dcid 即变成<scid dcid1>  注意这个新dcid1中有诸多信息 其中包含有worker信息
+        server端的这个dcid1就是 server的scid
+
+        第二个包到来时 <scid dcid1> 由于dcid1中含有worker信息 所以直接路由到指定worker
+        --- 这里只解决了 多进程 包分配的问题
+
 4.0 0-RTT
     0-RTT一般是新建链接时 产生新的id(packet级别) 导致会hash到错误的rs(这个新建链接之前的那个父链接所hash的rs)
     客户端第一次发送的0-RTT包与第一个Initial包需要填写相同的DCID和SCID值
@@ -194,15 +204,15 @@ typedef enum xqc_encrypt_level_s {
         c               s
     scid,dcid ---->
                <--- path_change
-                    new_con_id(scid1)
-    scid1,dcid --->
+                    new_con_id(dcid1)
+    scid,dcid1 --->
 
 
         c                   lb              s
     scid,dcid ----->
-            <---new_con_id(scid1+route)---path_change
-    scid1,dcid ---->
-    如果密钥共享 scid1可由lb生成
+            <---new_con_id(dcid1+route)---path_change
+    scid,dcid1 ---->
+    如果密钥共享 dcid1可由lb生成
     
     4层hash(id)  7层内核hash(id)到某个worker
 
