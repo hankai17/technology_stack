@@ -92,6 +92,7 @@ typedef enum xqc_encrypt_level_s {
                                 xqc_gen_long_packet_header  ---> long_packet39字节 此时payload中是39字节( 33 + 2 + pn_len(4))
                         xqc_gen_crypto_frame    ---> 构造CRYPTO帧 571(567 + 4)字节 并放入payload(从39字节处) 此时payload中是610(39(头) + 571(crypto帧))字节
                         xqc_send_queue_move_to_high_pri ---> 将该packet_out节点 排入到该conn的conn_send_queue  hankai消费1 ---> server端: packet_out(init) -> packet_out(hk){4}
+            xqc_conn_try_add_new_conn_id            ---> 链接建立成功后 会生成新id 以便链接迁移 --- 注意1.7版本之前没有引入mp流程
         xqc_conn_schedule_packets_to_paths
             xqc_conn_schedule_packets               ---> 将conn_send_queue中的包 排入path->path_schedule_buf[XQC_SEND_TYPE_NORMAL_HIGH_PRI]中 hankai消费2  假设跟hankai消费1队列保持一致
             path机制 TODO
@@ -114,8 +115,9 @@ typedef enum xqc_encrypt_level_s {
 3.1.1 Server端收包细节
     xqc_engine_packet_process
         xqc_packet_parse_cid                        ---> 解析处dcid跟scid
-        xqc_engine_conns_hash_find(scid)
-        xqc_conn_server_create                      ---> 没找到scid 则创建c
+        xqc_engine_conns_hash_find(dcid)            ---> 此dcid是客户端角度的dcid
+        xqc_conn_server_create                      ---> 没找到dcid 则创建c
+        NAT-rebinding/链接迁移                      ---> 如果链接迁移则发送path_challenge
         xqc_conn_process_packet
             xqc_packet_process_single
                 xqc_packet_parse_single
@@ -195,6 +197,15 @@ typedef enum xqc_encrypt_level_s {
 
         第二个包到来时 <scid dcid1> 由于dcid1中含有worker信息 所以直接路由到指定worker
         --- 这里只解决了 多进程 包分配的问题
+
+        ngx_xquic_get_target_worker_from_cid 这个函数既可以兼容 "裸dcid"(即客户端分配的随机的一个id) 又 可以兼容"加密dcid"(服务端生成的dcid 里面加密有ip port worker等信息)
+        tengine的做法是:
+            强制使得客户端的dcid是20字节(一般情况下是20字节的cid) 如果不是20字节则服务的会negotiate一个新的dcid(20字节)给客户端
+            假设一般场景下 即客户端产生的dcid是20字节
+            那么根据ngx_xquic_get_target_worker_from_cid 总会将这个随机产生的dcid分配到同一个worker
+            当建链成功后 服务的会xqc_conn_try_add_new_conn_id里面调用上层回调(构造加密dcid以备链接迁移使用) 发送给客户端
+            当链接迁移时 服务端给客户端发送path_chang后 客户端会使用上面的 加密dcid跟 服务端通信
+            过4lb时 找不到对应的session 那么可以解密这个加密的dcid 然后转发
 
 4.0 0-RTT
     0-RTT一般是新建链接时 产生新的id(packet级别) 导致会hash到错误的rs(这个新建链接之前的那个父链接所hash的rs)
