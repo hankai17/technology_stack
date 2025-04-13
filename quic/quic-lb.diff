@@ -1,0 +1,5205 @@
+commit 1b09d05ca89aeff35302ebf8048d97c65accb2dc
+Author: 毅丝 <william.zk@antfin.com>
+Date:   Mon Oct 12 17:36:35 2020 +0800
+
+    ietf-quic-lb implemetation
+
+diff --git a/.gitmodules b/.gitmodules
+new file mode 100644
+index 0000000..617644e
+--- /dev/null
++++ b/.gitmodules
+@@ -0,0 +1,6 @@
++[submodule "libs/cJSON"]
++	path = libs/cJSON
++	url = https://github.com/DaveGamble/cJSON
++[submodule "libs/openssl"]
++	path = libs/openssl
++	url = https://github.com/openssl/openssl
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..f67bd7e
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,117 @@
++nginx-quic-lb
++====
++nginx-quic-lb is an implementation of ietf-quic-lb(see https://tools.ietf.org/html/draft-ietf-quic-load-balancers-04), based on nginx-release-1.18.0
++
++
++How to build
++----
++```
++    1. git clone https://github.com/alipay/quic-lb 
++    2. git submodule update --init --recursive
++    3. sh build.sh
++```
++
++How to use:
++----
++tutorial configuration file(whole configuration file you can see ${quic-lb-dir}/test/conf/quic_lb.conf):
++```
++    stream {
++        upstream quic_upstreams {
++            quic_lb_mode;
++            server 127.0.0.1:8443 sid=127.0.0.1:8443;
++            server 127.0.0.1:8444 sid=127.0.0.1:8444;
++            server 127.0.0.1:8445 sid=127.0.0.1:8445;
++            server 127.0.0.1:8446 sid=127.0.0.1:8446;
++            server 127.0.0.1:8447 sid=127.0.0.1:8447;
++        }
++
++        server {
++            listen 8001 quic reuseport;
++            proxy_pass quic_upstreams;
++            quic_lb_conf_file quic_lb/conf/conf.json;
++            proxy_timeout 10s;
++            proxy_requests 10000;
++            proxy_responses 10000;
++        }
++    }
++```
++conf.json file are description below(as draft description: "'configuration agent' will delivery conf file to quic-lb and quic-server at the same time", so we write the same conf options in quic-lb and server into a single conf.json file):
++```
++    [{
++        "conf_id": 0,
++        "route_mode": "plaintext",
++        "sid_len": 14,
++        "retry_service_ctx":{
++            "retry_method":"shared_state",
++            "retry_mode":"inactive",
++            "retry_token_key":"01234567890123456789012345678901"
++        }
++    },
++    {
++        "conf_id": 1,
++        "route_mode": "block_cipher",
++        "sid_len": 14,
++        "retry_service_ctx":{
++            "retry_method":"shared_state",
++            "retry_mode":"inactive",
++            "retry_token_key":"01234567890123456789012345678901"
++        }
++    },
++    {
++        "conf_id": 2,
++        "route_mode": "stream_cipher",
++        "sid_len": 14,
++        "retry_service_ctx":{
++            "retry_method":"shared_state",
++            "retry_mode":"inactive",
++            "retry_token_key":"01234567890123456789012345678901"
++        }
++    }]
++```
++
++How to test
++----
++```
++    1. pip install pytest
++    2. cd ${quic-lb-dir}/test
++    3. make test
++```
++
++Additional:
++----
++1.you can test nginx-quic-lb with ngtcp2, like this:
++```
++1) git clone https://github.com/william-zk/ngtcp2
++2) build ngtcp2(see https://github.com/william-zk/ngtcp2/blob/master/README.rst)
++3) running ngtcp2-server:
++./server -d testRoot 127.0.0.1 8444 rsa.key rsa.crt --sid 127.0.0.1:8444
++./server -d testRoot 127.0.0.1 8443 rsa.key rsa.crt --sid 127.0.0.1:8443
++4) running a quic-lb(with tutorial quic_lb.conf)
++5) running ngtcp2-client to test basic quic transmission:
++./client 127.0.0.1 9001 https://127.0.0.1:4433/index.html -n 1 --no-quic-dump --no-http-dump  --download clientDownload
++6) running ngtcp2-client to test quic connection-migration:
++./client 127.0.0.1 9001 https://127.0.0.1:4433/index.html -n 1 --no-quic-dump --no-http-dump  --download clientDownload --change-local-addr 1 --delay-stream 2 --nat-rebinding
++```
++
++2.quic-server can obtain real client ip with option "quic_lb_proxy_protocol", like this
++```
++server {
++    listen 8001 quic reuseport;
++    quic_lb_proxy_protocol on;
++    ...
++}
++```
++then every udp packet would carry a quic-lb-proxy-protocol Header as below:
++```
++PROXY_STRING + single space + INET_PROTOCOL + single space + CLIENT_IP + single space + PROXY_IP + single space + CLIENT_PORT + single space + PROXY_PORT + "\r\n"
++```
++
++for ipv4, it would like:
++```
++PROXY QUICV4 192.0.2.0 192.0.2.255 42300 443\r\n
++```
++
++for ipv6, it would like:
++```
++PROXY QUICV6 2001:db8:: 2001:db8:ffff:ffff:ffff:ffff:ffff:ffff 42300 443\r\n
++```
+diff --git a/auto/make b/auto/make
+index 34c40cd..8be8be4 100644
+--- a/auto/make
++++ b/auto/make
+@@ -11,6 +11,7 @@ mkdir -p $NGX_OBJS/src/core $NGX_OBJS/src/event $NGX_OBJS/src/event/modules \
+          $NGX_OBJS/src/http/modules/perl \
+          $NGX_OBJS/src/mail \
+          $NGX_OBJS/src/stream \
++         $NGX_OBJS/src/stream/quic_lb \
+          $NGX_OBJS/src/misc
+ 
+ 
+diff --git a/auto/modules b/auto/modules
+index d78e282..f04e1f9 100644
+--- a/auto/modules
++++ b/auto/modules
+@@ -1119,6 +1119,24 @@ if [ $STREAM != NO ]; then
+         . auto/module
+     fi
+ 
++    if [ $STREAM_QUIC_LB = YES ]; then
++        have=NGX_QUIC_LB . auto/have
++        USE_OPENSSL=YES
++        ngx_module_name="ngx_stream_quic_lb_module \
++                         ngx_stream_upstream_quic_lb_module"
++        ngx_module_deps="src/stream/quic_lb/ngx_stream_quic_lb_module.h \
++                         src/stream/quic_lb/ngx_stream_quic_comm.h \
++                         src/stream/quic_lb/ngx_stream_quic_lb_retry_service.h"
++        ngx_module_srcs="src/stream/quic_lb/ngx_stream_upstream_quic_lb_module.c \
++                         src/stream/quic_lb/ngx_stream_quic_lb_module.c \
++                         src/stream/quic_lb/ngx_stream_quic_comm.c \
++                         src/stream/quic_lb/ngx_stream_quic_lb_retry_service.c"
++        ngx_module_libs=
++        ngx_module_link=$STREAM_QUIC_LB
++
++        . auto/module
++    fi
++
+     if [ $STREAM_UPSTREAM_HASH = YES ]; then
+         ngx_module_name=ngx_stream_upstream_hash_module
+         ngx_module_deps=
+diff --git a/auto/options b/auto/options
+index 521c976..1e1a7c3 100644
+--- a/auto/options
++++ b/auto/options
+@@ -129,6 +129,7 @@ STREAM_UPSTREAM_LEAST_CONN=YES
+ STREAM_UPSTREAM_RANDOM=YES
+ STREAM_UPSTREAM_ZONE=YES
+ STREAM_SSL_PREREAD=NO
++STREAM_QUIC_LB=NO
+ 
+ DYNAMIC_MODULES=
+ 
+@@ -316,6 +317,8 @@ use the \"--with-mail_ssl_module\" option instead"
+                                          STREAM_GEOIP=DYNAMIC       ;;
+         --with-stream_ssl_preread_module)
+                                          STREAM_SSL_PREREAD=YES     ;;
++        --with-stream_quic_lb_module)
++                                         STREAM_QUIC_LB=YES         ;;
+         --without-stream_limit_conn_module)
+                                          STREAM_LIMIT_CONN=NO       ;;
+         --without-stream_access_module)  STREAM_ACCESS=NO           ;;
+diff --git a/build.sh b/build.sh
+new file mode 100755
+index 0000000..6c5c1d6
+--- /dev/null
++++ b/build.sh
+@@ -0,0 +1,34 @@
++#!/bin/sh
++#****************************************************************#
++# ScriptName: build.sh
++# Author: $SHTERM_REAL_USER@alibaba-inc.com
++# Create Date: 2020-07-06 21:26
++# Modify Author: william.zk@antfin.com
++# Modify Date: 2020-07-25 16:15
++# Function:
++#***************************************************************#
++
++# build cjson
++cd libs/cJSON
++make
++cd ../..
++
++CFLAGS="-g2 -O0"
++
++#build nginx-quic-lb
++./auto/configure --with-debug \
++                 --with-stream_quic_lb_module \
++                 --with-openssl=libs/openssl \
++                 --with-cc-opt=" -I./libs/cJSON -Wall "   \
++                 --with-ld-opt=" ./libs/cJSON/libcjson.a " \
++                 --with-stream
++
++make install
++cp -f objs/nginx output/nginx
++cp -f objs/nginx test/quic_lb/nginx
++
++#build autotest file
++cd test
++make clean
++make build
++cd ..
+diff --git a/libs/cJSON b/libs/cJSON
+new file mode 160000
+index 0000000..d273527
+--- /dev/null
++++ b/libs/cJSON
+@@ -0,0 +1 @@
++Subproject commit d2735278ed1c2e4556f53a7a782063b31331dbf7
+diff --git a/libs/openssl b/libs/openssl
+new file mode 160000
+index 0000000..36eadf1
+--- /dev/null
++++ b/libs/openssl
+@@ -0,0 +1 @@
++Subproject commit 36eadf1f84daa965041cce410b4ff32cbda4ef08
+diff --git a/src/core/ngx_connection.h b/src/core/ngx_connection.h
+index ad6556d..e98f623 100644
+--- a/src/core/ngx_connection.h
++++ b/src/core/ngx_connection.h
+@@ -24,7 +24,9 @@ struct ngx_listening_s {
+     ngx_str_t           addr_text;
+ 
+     int                 type;
+-
++#ifdef NGX_QUIC_LB
++    unsigned            proxy_quic:1;
++#endif
+     int                 backlog;
+     int                 rcvbuf;
+     int                 sndbuf;
+@@ -142,7 +144,9 @@ struct ngx_connection_s {
+     ngx_pool_t         *pool;
+ 
+     int                 type;
+-
++#ifdef NGX_QUIC_LB
++    unsigned            proxy_quic:1;
++#endif
+     struct sockaddr    *sockaddr;
+     socklen_t           socklen;
+     ngx_str_t           addr_text;
+diff --git a/src/event/ngx_event_udp.c b/src/event/ngx_event_udp.c
+index 5572830..c96ce36 100644
+--- a/src/event/ngx_event_udp.c
++++ b/src/event/ngx_event_udp.c
+@@ -286,6 +286,9 @@ ngx_event_recvmsg(ngx_event_t *ev)
+ 
+         c->shared = 1;
+         c->type = SOCK_DGRAM;
++#ifdef NGX_QUIC_LB
++        c->proxy_quic = ls->proxy_quic;
++#endif
+         c->socklen = socklen;
+ 
+ #if (NGX_STAT_STUB)
+diff --git a/src/stream/ngx_stream.c b/src/stream/ngx_stream.c
+index 7835675..6d83d50 100644
+--- a/src/stream/ngx_stream.c
++++ b/src/stream/ngx_stream.c
+@@ -486,6 +486,9 @@ ngx_stream_optimize_servers(ngx_conf_t *cf, ngx_array_t *ports)
+             ls->handler = ngx_stream_init_connection;
+             ls->pool_size = 256;
+             ls->type = addr[i].opt.type;
++#ifdef NGX_QUIC_LB
++            ls->proxy_quic = addr[i].opt.proxy_quic;
++#endif
+ 
+             cscf = addr->opt.ctx->srv_conf[ngx_stream_core_module.ctx_index];
+ 
+diff --git a/src/stream/ngx_stream.h b/src/stream/ngx_stream.h
+index 9e35832..81af5e2 100644
+--- a/src/stream/ngx_stream.h
++++ b/src/stream/ngx_stream.h
+@@ -16,6 +16,11 @@
+ #include <ngx_stream_ssl_module.h>
+ #endif
+ 
++#ifdef NGX_QUIC_LB
++#include <quic_lb/ngx_stream_quic_comm.h>
++#include <quic_lb/ngx_stream_quic_lb_retry_service.h>
++#include <quic_lb/ngx_stream_quic_lb_module.h>
++#endif
+ 
+ typedef struct ngx_stream_session_s  ngx_stream_session_t;
+ 
+@@ -66,6 +71,9 @@ typedef struct {
+     int                            rcvbuf;
+     int                            sndbuf;
+     int                            type;
++#ifdef NGX_QUIC_LB
++    unsigned                       proxy_quic:1;
++#endif
+ } ngx_stream_listen_t;
+ 
+ 
+@@ -228,6 +236,10 @@ struct ngx_stream_session_s {
+     unsigned                       health_check:1;
+ 
+     unsigned                       limit_conn_status:2;
++#ifdef NGX_QUIC_LB
++    ngx_quic_header_t               *pkt;
++    ngx_quic_lb_conf_t              *quic_lb_conf;
++#endif
+ };
+ 
+ 
+@@ -297,6 +309,9 @@ void ngx_stream_finalize_session(ngx_stream_session_t *s, ngx_uint_t rc);
+ extern ngx_module_t  ngx_stream_module;
+ extern ngx_uint_t    ngx_stream_max_module;
+ extern ngx_module_t  ngx_stream_core_module;
++#ifdef NGX_QUIC_LB
++extern ngx_module_t  ngx_stream_quic_lb_module;
++#endif
+ 
+ 
+ typedef ngx_int_t (*ngx_stream_filter_pt)(ngx_stream_session_t *s,
+diff --git a/src/stream/ngx_stream_core_module.c b/src/stream/ngx_stream_core_module.c
+index 9b6afe9..b9c4967 100644
+--- a/src/stream/ngx_stream_core_module.c
++++ b/src/stream/ngx_stream_core_module.c
+@@ -628,6 +628,15 @@ ngx_stream_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+             ls->type = SOCK_DGRAM;
+             continue;
+         }
++
++#ifdef NGX_QUIC_LB
++        if (ngx_strcmp(value[i].data, "quic") == 0) {
++            ls->type = SOCK_DGRAM;
++            ls->proxy_quic = 1;
++            continue;
++        }
++#endif
++
+ #endif
+ 
+         if (ngx_strcmp(value[i].data, "bind") == 0) {
+diff --git a/src/stream/ngx_stream_proxy_module.c b/src/stream/ngx_stream_proxy_module.c
+index 7484a72..42d6978 100644
+--- a/src/stream/ngx_stream_proxy_module.c
++++ b/src/stream/ngx_stream_proxy_module.c
+@@ -669,7 +669,6 @@ ngx_stream_proxy_set_local(ngx_stream_session_t *s, ngx_stream_upstream_t *u,
+     return NGX_OK;
+ }
+ 
+-
+ static void
+ ngx_stream_proxy_connect(ngx_stream_session_t *s)
+ {
+@@ -706,7 +705,22 @@ ngx_stream_proxy_connect(ngx_stream_session_t *s)
+     u->state->connect_time = (ngx_msec_t) -1;
+     u->state->first_byte_time = (ngx_msec_t) -1;
+     u->state->response_time = (ngx_msec_t) -1;
++#ifdef NGX_QUIC_LB
++    if (c->proxy_quic) {
++        ngx_stream_upstream_rr_peer_data_t *rrp = u->peer.data;
++
++        rrp->pkt = ngx_stream_quic_lb_gen_copy_pkt(c, s->pkt);
+ 
++        if (rrp->pkt == NULL) {
++            ngx_log_error(NGX_LOG_ERR, c->log, 0, "QUIC-LB generate copy pkt error");
++            ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
++            return;
++        }
++
++        rrp->quic_lb_conf = s->quic_lb_conf;
++    }
++
++#endif
+     rc = ngx_event_connect_peer(&u->peer);
+ 
+     ngx_log_debug1(NGX_LOG_DEBUG_STREAM, c->log, 0, "proxy connect: %i", rc);
+@@ -1561,6 +1575,32 @@ ngx_stream_proxy_process(ngx_stream_session_t *s, ngx_uint_t from_upstream,
+         if (do_write && dst) {
+ 
+             if (*out || *busy || dst->buffered) {
++
++#ifdef NGX_QUIC_LB
++                if (c->proxy_quic) {
++                    if (!from_upstream) {
++                        ngx_stream_quic_lb_proxy_call_params_t pcps = {
++                            .buffer_size = pscf->buffer_size,
++                            .connect_timeout = pscf->connect_timeout,
++                            .connect_handler = ngx_stream_proxy_connect_handler,
++                            .proxy_upstream_handler = ngx_stream_proxy_upstream_handler,
++                            .up_rate = pscf->upload_rate,
++                            .down_rate = pscf->download_rate,
++                            .out = *out
++                        };
++
++                        rc = ngx_stream_quic_lb_downstream_pkt_send_process(s, &pcps);
++                        if (rc == NGX_ERROR) {
++                            ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
++                            return;
++                        }
++                        if (rc == NGX_DECLINED) {
++                            ngx_stream_proxy_finalize(s, NGX_STREAM_FORBIDDEN);
++                            return;
++                        }
++                    }
++                }
++#endif
+                 c->log->action = send_action;
+ 
+                 rc = ngx_stream_top_filter(s, *out, from_upstream);
+diff --git a/src/stream/ngx_stream_upstream.c b/src/stream/ngx_stream_upstream.c
+index eadcf9f..f7d4c52 100644
+--- a/src/stream/ngx_stream_upstream.c
++++ b/src/stream/ngx_stream_upstream.c
+@@ -511,6 +511,14 @@ ngx_stream_upstream_server(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+             continue;
+         }
+ 
++#ifdef NGX_QUIC_LB
++        if (ngx_strncmp(value[i].data, "sid=", 4) == 0) {
++            us->sid.data = &value[i].data[4];
++            us->sid.len = ngx_strlen((const char*)us->sid.data);
++            continue;
++        }
++#endif
++
+         goto invalid;
+     }
+ 
+diff --git a/src/stream/ngx_stream_upstream.h b/src/stream/ngx_stream_upstream.h
+index 9857e0b..c736d52 100644
+--- a/src/stream/ngx_stream_upstream.h
++++ b/src/stream/ngx_stream_upstream.h
+@@ -59,6 +59,9 @@ typedef struct {
+     time_t                             fail_timeout;
+     ngx_msec_t                         slow_start;
+     ngx_uint_t                         down;
++#ifdef NGX_QUIC_LB
++    ngx_str_t                          sid;
++#endif
+ 
+     unsigned                           backup:1;
+ 
+diff --git a/src/stream/ngx_stream_upstream_hash_module.c b/src/stream/ngx_stream_upstream_hash_module.c
+index b764fcb..49b6ed1 100644
+--- a/src/stream/ngx_stream_upstream_hash_module.c
++++ b/src/stream/ngx_stream_upstream_hash_module.c
+@@ -49,15 +49,14 @@ static ngx_int_t ngx_stream_upstream_get_hash_peer(ngx_peer_connection_t *pc,
+ 
+ static ngx_int_t ngx_stream_upstream_init_chash(ngx_conf_t *cf,
+     ngx_stream_upstream_srv_conf_t *us);
+-static int ngx_libc_cdecl
+-    ngx_stream_upstream_chash_cmp_points(const void *one, const void *two);
++static int ngx_libc_cdecl ngx_stream_upstream_chash_cmp_points(const void *one,
++    const void *two);
+ static ngx_uint_t ngx_stream_upstream_find_chash_point(
+     ngx_stream_upstream_chash_points_t *points, uint32_t hash);
+ static ngx_int_t ngx_stream_upstream_init_chash_peer(ngx_stream_session_t *s,
+     ngx_stream_upstream_srv_conf_t *us);
+ static ngx_int_t ngx_stream_upstream_get_chash_peer(ngx_peer_connection_t *pc,
+     void *data);
+-
+ static void *ngx_stream_upstream_hash_create_conf(ngx_conf_t *cf);
+ static char *ngx_stream_upstream_hash(ngx_conf_t *cf, ngx_command_t *cmd,
+     void *conf);
+diff --git a/src/stream/ngx_stream_upstream_round_robin.h b/src/stream/ngx_stream_upstream_round_robin.h
+index 35d9fce..9a462e4 100644
+--- a/src/stream/ngx_stream_upstream_round_robin.h
++++ b/src/stream/ngx_stream_upstream_round_robin.h
+@@ -47,6 +47,10 @@ struct ngx_stream_upstream_rr_peer_s {
+     ngx_atomic_t                     lock;
+ #endif
+ 
++#ifdef NGX_QUIC_LB
++    ngx_str_t                        sid;
++#endif
++
+     ngx_stream_upstream_rr_peer_t   *next;
+ 
+     NGX_COMPAT_BEGIN(25)
+@@ -128,6 +132,10 @@ typedef struct {
+     ngx_stream_upstream_rr_peer_t   *current;
+     uintptr_t                       *tried;
+     uintptr_t                        data;
++#ifdef NGX_QUIC_LB
++    ngx_quic_header_t               *pkt;
++    ngx_quic_lb_conf_t              *quic_lb_conf;
++#endif
+ } ngx_stream_upstream_rr_peer_data_t;
+ 
+ 
+diff --git a/src/stream/quic_lb/ngx_stream_quic_comm.c b/src/stream/quic_lb/ngx_stream_quic_comm.c
+new file mode 100644
+index 0000000..48a3d5b
+--- /dev/null
++++ b/src/stream/quic_lb/ngx_stream_quic_comm.c
+@@ -0,0 +1,131 @@
++
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: william.zk
++ */
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_stream.h>
++
++static ngx_inline u_char *ngx_quic_parse_int(u_char *pos, u_char *end, uint64_t *out);
++
++
++u_char *
++ngx_quic_read_uint8(u_char *pos, u_char *end, uint8_t *value)
++{
++    if ((size_t)(end - pos) < 1) {
++        return NULL;
++    }
++
++    *value = *pos;
++
++    return pos + 1;
++}
++
++
++u_char *
++ngx_quic_read_uint32(u_char *pos, u_char *end, uint32_t *value)
++{
++    if ((size_t)(end - pos) < sizeof(uint32_t)) {
++        return NULL;
++    }
++
++    *value = ngx_quic_parse_uint32(pos);
++
++    return pos + sizeof(uint32_t);
++}
++
++
++static ngx_inline u_char *
++ngx_quic_parse_int(u_char *pos, u_char *end, uint64_t *out)
++{
++    u_char      *p;
++    uint64_t     value;
++    ngx_uint_t   len;
++
++    if (pos >= end) {
++        return NULL;
++    }
++
++    p = pos;
++    len = 1 << ((*p & 0xc0) >> 6);
++
++    value = *p++ & 0x3f;
++
++    if ((size_t)(end - p) < (len - 1)) {
++        return NULL;
++    }
++
++    while (--len) {
++        value = (value << 8) + *p++;
++    }
++
++    *out = value;
++
++    return p;
++}
++
++
++u_char *
++ngx_quic_read_bytes(u_char *pos, u_char *end, size_t len, u_char **out)
++{
++    if ((size_t)(end - pos) < len) {
++        return NULL;
++    }
++
++    *out = pos;
++
++    return pos + len;
++}
++
++
++ngx_int_t
++ngx_quic_parse_initial_header(ngx_quic_header_t *pkt)                  // hankai 从long header中的init包中解析出token
++{
++    u_char    *p, *end;
++    uint64_t   varint;
++
++    p = pkt->raw->pos;
++
++    end = pkt->raw->last;
++
++    pkt->log->action = "QUIC-LB, parsing quic initial header";
++
++    p = ngx_quic_parse_int(p, end, &varint);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic failed to parse token length");
++        return NGX_ERROR;
++    }
++
++    pkt->token.len = varint;
++
++    p = ngx_quic_read_bytes(p, end, pkt->token.len, &pkt->token.data);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet too small to read token data");
++        return NGX_ERROR;
++    }
++
++    p = ngx_quic_parse_int(p, end, &varint);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0, "QUIC-LB, quic bad packet length");
++        return NGX_ERROR;
++    }
++
++    ngx_log_debug1(NGX_LOG_DEBUG_EVENT, pkt->log, 0,
++                   "QUIC-LB, quic initial packet length: %uL", varint);
++
++    if (varint > (uint64_t) ((pkt->data + pkt->len) - p)) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic truncated initial packet");
++        return NGX_ERROR;
++    }
++
++    pkt->raw->pos = p;
++    pkt->len = varint;
++
++    return NGX_OK;
++}
+diff --git a/src/stream/quic_lb/ngx_stream_quic_comm.h b/src/stream/quic_lb/ngx_stream_quic_comm.h
+new file mode 100644
+index 0000000..13b54f7
+--- /dev/null
++++ b/src/stream/quic_lb/ngx_stream_quic_comm.h
+@@ -0,0 +1,211 @@
++
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: william.zk
++ */
++
++
++#ifndef _NGX_STREAM_QUIC_COMM_H_INCLUDED_
++#define _NGX_STREAM_QUIC_COMM_H_INCLUDED_
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_stream.h>
++
++
++#define NGX_QUIC_IV_LEN               12
++
++
++#define NGX_AES_128_GCM_SHA256        0x1301
++#define NGX_AES_256_GCM_SHA384        0x1302
++#define NGX_CHACHA20_POLY1305_SHA256  0x1303
++
++
++#ifdef OPENSSL_IS_BORINGSSL
++#define ngx_quic_cipher_t             EVP_AEAD
++#else
++#define ngx_quic_cipher_t             EVP_CIPHER
++#endif
++
++
++#define NGX_QUIC_CID_LEN_MIN                                8
++#define NGX_QUIC_CID_LEN_MAX                               20
++
++
++#define NGX_QUIC_PKT_LONG       0x80  /* header form */
++#define NGX_QUIC_PKT_FIXED_BIT  0x40
++#define NGX_QUIC_PKT_TYPE       0x30  /* in long packet */
++#define NGX_QUIC_PKT_KPHASE     0x04  /* in short packet */
++
++
++#define NGX_QUIC_PKT_LONG_RESERVED_BIT   0x0C
++#define NGX_QUIC_PKT_SHORT_RESERVED_BIT  0x18
++
++
++#define ngx_quic_long_pkt(flags)  ((flags) & NGX_QUIC_PKT_LONG)
++#define ngx_quic_short_pkt(flags)  (((flags) & NGX_QUIC_PKT_LONG) == 0)
++
++
++/* Long packet types */
++#define NGX_QUIC_PKT_INITIAL    0x00
++#define NGX_QUIC_PKT_ZRTT       0x10
++#define NGX_QUIC_PKT_HANDSHAKE  0x20
++#define NGX_QUIC_PKT_RETRY      0x30
++
++
++#define ngx_quic_pkt_in(flags)                                                \
++    (((flags) & NGX_QUIC_PKT_TYPE) == NGX_QUIC_PKT_INITIAL)
++#define ngx_quic_pkt_zrtt(flags)                                              \
++    (((flags) & NGX_QUIC_PKT_TYPE) == NGX_QUIC_PKT_ZRTT)
++#define ngx_quic_pkt_hs(flags)                                                \
++    (((flags) & NGX_QUIC_PKT_TYPE) == NGX_QUIC_PKT_HANDSHAKE)
++#define ngx_quic_pkt_retry(flags)                                             \
++    (((flags) & NGX_QUIC_PKT_TYPE) == NGX_QUIC_PKT_RETRY)
++
++
++#ifndef NGX_QUIC_DRAFT_VERSION
++#define NGX_QUIC_DRAFT_VERSION               29
++#endif
++#define NGX_QUIC_VERSION  (0xff000000 + NGX_QUIC_DRAFT_VERSION)
++#define NGX_QUIC_MAX_TOKEN_SIZE              32
++#define NGX_QUIC_RETRY_BUFFER_SIZE           128
++
++
++#if (NGX_HAVE_NONALIGNED)
++
++#define ngx_quic_parse_uint16(p)  ntohs(*(uint16_t *) (p))
++#define ngx_quic_parse_uint32(p)  ntohl(*(uint32_t *) (p))
++
++#define ngx_quic_write_uint16  ngx_quic_write_uint16_aligned
++#define ngx_quic_write_uint32  ngx_quic_write_uint32_aligned
++
++#else
++
++
++#define ngx_quic_parse_uint16(p)  ((p)[0] << 8 | (p)[1])
++#define ngx_quic_parse_uint32(p)                                              \
++    ((uint32_t) (p)[0] << 24 | (p)[1] << 16 | (p)[2] << 8 | (p)[3])
++
++
++#define ngx_quic_write_uint16(p, s)                                           \
++    ((p)[0] = (u_char) ((s) >> 8),                                            \
++     (p)[1] = (u_char)  (s),                                                  \
++     (p) + sizeof(uint16_t))
++
++
++#define ngx_quic_write_uint32(p, s)                                           \
++    ((p)[0] = (u_char) ((s) >> 24),                                           \
++     (p)[1] = (u_char) ((s) >> 16),                                           \
++     (p)[2] = (u_char) ((s) >> 8),                                            \
++     (p)[3] = (u_char)  (s),                                                  \
++     (p) + sizeof(uint32_t))
++
++#endif
++
++
++#define ngx_quic_write_uint24(p, s)                                           \
++    ((p)[0] = (u_char) ((s) >> 16),                                           \
++     (p)[1] = (u_char) ((s) >> 8),                                            \
++     (p)[2] = (u_char)  (s),                                                  \
++     (p) + 3)
++
++
++#define ngx_quic_write_uint16_aligned(p, s)                                   \
++    (*(uint16_t *) (p) = htons((uint16_t) (s)), (p) + sizeof(uint16_t))
++
++
++#define ngx_quic_write_uint32_aligned(p, s)                                   \
++    (*(uint32_t *) (p) = htonl((uint32_t) (s)), (p) + sizeof(uint32_t))
++
++
++#define ngx_quic_varint_len(value)                                            \
++     ((value) <= 63 ? 1                                                       \
++     : ((uint32_t) value) <= 16383 ? 2                                        \
++     : ((uint64_t) value) <= 1073741823 ?  4                                  \
++     : 8)
++
++
++#if (NGX_DEBUG)
++
++#define ngx_quic_hexdump(log, label, data, len)                               \
++do {                                                                          \
++    ngx_int_t  m;                                                             \
++    u_char     buf[2048];                                                     \
++                                                                              \
++    if (log->log_level & NGX_LOG_DEBUG_EVENT) {                               \
++        m = ngx_hex_dump(buf, (u_char *) data, ngx_min(len, 1024)) - buf;     \
++        ngx_log_debug4(NGX_LOG_DEBUG_EVENT, log, 0,                           \
++                      label " len:%uz data:%*s%s",                            \
++                      len, m, buf, len < 2048 ? "" : "...");                  \
++    }                                                                         \
++} while (0)
++
++#else
++
++#define ngx_quic_hexdump(log, fmt, data, len)
++
++#endif
++
++
++typedef struct ngx_quic_secret_s {
++    ngx_str_t                 secret;
++    ngx_str_t                 key;
++    ngx_str_t                 iv;
++    ngx_str_t                 hp;
++} ngx_quic_secret_t;
++
++
++typedef struct {
++    ngx_log_t                                  *log;
++
++    struct ngx_quic_secret_s                   *secret;
++    struct ngx_quic_secret_s                   *next;
++    uint64_t                                    number;
++    uint8_t                                     num_len;
++    uint32_t                                    trunc;
++    uint8_t                                     flags;
++    uint32_t                                    version;
++    ngx_str_t                                   token;
++    ngx_uint_t                                  error;
++
++    /* filled in by parser */
++    ngx_buf_t                                  *raw;   /* udp datagram */
++
++    u_char                                     *data;  /* quic packet */
++    size_t                                      len;
++
++    /* cleartext fields */
++    ngx_str_t                                   odcid; /* retry packet tag */
++    ngx_str_t                                   dcid;
++    ngx_str_t                                   scid;
++    uint64_t                                    pn;
++    u_char                                     *plaintext;
++    ngx_str_t                                   payload; /* decrypted data */
++
++    unsigned                                    need_ack:1;
++    unsigned                                    key_phase:1;
++    unsigned                                    key_update:1;
++
++    /* add for quic lb */
++    ngx_int_t                                   conf_id;
++    ngx_flag_t                                  initial_pkt;
++    ngx_str_t                                   sid; /* record dst server id */
++} ngx_quic_header_t;
++
++
++typedef struct {
++    const ngx_quic_cipher_t  *c;
++    const EVP_CIPHER         *hp;
++    const EVP_MD             *d;
++} ngx_quic_ciphers_t;
++
++
++ngx_int_t ngx_quic_parse_initial_header(ngx_quic_header_t *pkt);
++u_char *ngx_quic_read_bytes(u_char *pos, u_char *end,
++    size_t len, u_char **out);
++u_char *ngx_quic_read_uint8(u_char *pos, u_char *end,
++    uint8_t *value);
++u_char *ngx_quic_read_uint32(u_char *pos, u_char *end,
++    uint32_t *value);
++#endif
+diff --git a/src/stream/quic_lb/ngx_stream_quic_lb_module.c b/src/stream/quic_lb/ngx_stream_quic_lb_module.c
+new file mode 100644
+index 0000000..eed9242
+--- /dev/null
++++ b/src/stream/quic_lb/ngx_stream_quic_lb_module.c
+@@ -0,0 +1,1060 @@
++
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: william.zk
++ */
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_stream.h>
++
++
++static char *ngx_stream_quic_lb_proxy_read_conf_file(ngx_conf_t *cf,
++    ngx_command_t *cmd, void *conf);
++static ngx_int_t ngx_stream_quic_lb_parse_json_conf_file(ngx_conf_t *cf,
++    ngx_str_t *name, ngx_quic_lb_conf_t *quic_lb_conf);
++static ngx_int_t ngx_stream_quic_lb_parse_json(ngx_conf_t *cf,
++    ngx_quic_lb_conf_t *quic_lb_conf, u_char *buf, size_t size, ngx_str_t *name);
++static ngx_int_t ngx_stream_quic_lb_parse_retry_service_json(ngx_conf_t *cf,
++    ngx_quic_lb_conf_t *quic_lb_conf, cJSON *root, ngx_str_t *name);
++static void *ngx_stream_quic_lb_create_srv_conf(ngx_conf_t *cf);
++static char *ngx_stream_quic_lb_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
++static ngx_int_t ngx_stream_quic_lb_init(ngx_conf_t *cf);
++static ngx_int_t ngx_stream_quic_lb_parse_header_from_buf(ngx_quic_header_t *pkt,
++    ngx_buf_t *buf, ngx_connection_t *c, ngx_quic_lb_conf_t *conf_list);
++static ngx_int_t ngx_stream_quic_lb_parse_short_header_conf_bit(ngx_quic_header_t *pkt);
++static ngx_int_t ngx_stream_quic_lb_parse_short_header_with_fix_dcid_len(
++    ngx_quic_header_t *pkt, ngx_int_t dcid_len);
++static ngx_int_t ngx_stream_quic_lb_parse_config_rotation_bit(ngx_quic_header_t *pkt);
++static u_char * ngx_stream_quic_lb_proxy_protocol_write(ngx_connection_t *c, u_char *buf, u_char *last);
++static ngx_int_t ngx_stream_quic_lb_parse_long_header(ngx_quic_header_t *pkt);
++static ngx_int_t ngx_stream_quic_lb_rechoose_peer(ngx_stream_session_t *s,
++    ngx_stream_quic_lb_proxy_call_params_t *pcps);
++static ngx_int_t ngx_stream_quic_lb_reinit_upstream(ngx_stream_session_t *s,
++    ngx_stream_quic_lb_proxy_call_params_t *pcps);
++
++
++static ngx_command_t  ngx_stream_quic_lb_commands[] = {
++
++    { ngx_string("quic_lb_conf_file"),
++      NGX_STREAM_SRV_CONF|NGX_CONF_TAKE1,
++      ngx_stream_quic_lb_proxy_read_conf_file,
++      NGX_STREAM_SRV_CONF_OFFSET,
++      0,
++      NULL },
++
++    { ngx_string("quic_lb_proxy_protocol"),
++      NGX_STREAM_SRV_CONF|NGX_CONF_FLAG,
++      ngx_conf_set_flag_slot,
++      NGX_STREAM_SRV_CONF_OFFSET,
++      offsetof(ngx_stream_quic_lb_srv_conf_t, quic_lb_proxy_protocol),
++      NULL },
++
++    ngx_null_command
++};
++
++
++static ngx_stream_module_t  ngx_stream_quic_lb_module_ctx = {
++    NULL,                                    /* preconfiguration */
++    ngx_stream_quic_lb_init,                 /* postconfiguration */
++
++    NULL,                                    /* create main configuration */
++    NULL,                                    /* init main configuration */
++
++    ngx_stream_quic_lb_create_srv_conf,      /* create server configuration */
++    ngx_stream_quic_lb_merge_srv_conf        /* merge server configuration */
++};
++
++
++ngx_module_t  ngx_stream_quic_lb_module = {
++    NGX_MODULE_V1,
++    &ngx_stream_quic_lb_module_ctx,          /* module context */
++    ngx_stream_quic_lb_commands,             /* module directives */
++    NGX_STREAM_MODULE,                     /* module type */
++    NULL,                                  /* init master */
++    NULL,                                  /* init module */
++    NULL,                                  /* init process */
++    NULL,                                  /* init thread */
++    NULL,                                  /* exit thread */
++    NULL,                                  /* exit process */
++    NULL,                                  /* exit master */
++    NGX_MODULE_V1_PADDING
++};
++
++
++ngx_int_t
++ngx_stream_quic_lb_add_proxy_protocol(void *s_)
++{
++    ngx_stream_session_t         *s;
++    ngx_connection_t             *c;
++    ngx_stream_upstream_t        *u;
++    ngx_chain_t                  *cl;
++    u_char                       *p;
++    s = s_;
++    u = s->upstream;
++    c = s->connection;
++
++    ngx_log_debug0(NGX_LOG_DEBUG_STREAM, c->log, 0,
++                   "QUIC-LB add PROXY protocol header");
++
++    cl = ngx_chain_get_free_buf(c->pool, &u->free);
++    if (cl == NULL) {
++        return NGX_ERROR;
++    }
++
++    p = ngx_pnalloc(c->pool, NGX_PROXY_PROTOCOL_MAX_HEADER);
++    if (p == NULL) {
++        return NGX_ERROR;
++    }
++
++    cl->buf->pos = p;
++
++    p = ngx_stream_quic_lb_proxy_protocol_write(c, p, p + NGX_PROXY_PROTOCOL_MAX_HEADER);
++    if (p == NULL) {
++        return NGX_ERROR;
++    }
++
++    cl->buf->last = p;
++    cl->buf->temporary = 1;
++    cl->buf->flush = 0;
++    cl->buf->last_buf = 0;
++    cl->buf->tag = (ngx_buf_tag_t)&ngx_stream_proxy_module;
++
++    cl->next = u->upstream_out;
++    u->upstream_out = cl;
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_reinit_upstream(ngx_stream_session_t *s,
++    ngx_stream_quic_lb_proxy_call_params_t *pcps)
++{
++    u_char                       *p;
++    ngx_connection_t             *c, *pc;
++    ngx_log_handler_pt            handler;
++    ngx_stream_upstream_t        *u;
++
++    u = s->upstream;
++    pc = u->peer.connection;
++
++    ngx_stream_complex_value_t *up_rate = pcps->up_rate;
++    ngx_stream_complex_value_t *down_rate = pcps->down_rate;
++
++    c = s->connection;
++
++    if (c->log->log_level >= NGX_LOG_INFO) {
++        ngx_str_t  str;
++        u_char     addr[NGX_SOCKADDR_STRLEN];
++
++        str.len = NGX_SOCKADDR_STRLEN;
++        str.data = addr;
++
++        if (ngx_connection_local_sockaddr(pc, &str, 1) == NGX_OK) {
++            handler = c->log->handler;
++            c->log->handler = NULL;
++
++            ngx_log_error(NGX_LOG_INFO, c->log, 0,
++                          "QUIC-LB %sproxy %V connected to %V",
++                          pc->type == SOCK_DGRAM ? "udp " : "",
++                          &str, u->peer.name);
++
++            c->log->handler = handler;
++        }
++    }
++
++    u->state->connect_time = ngx_current_msec - u->start_time;
++
++    if (u->peer.notify) {
++        u->peer.notify(&u->peer, u->peer.data,
++                       NGX_STREAM_UPSTREAM_NOTIFY_CONNECT);
++    }
++
++    /* should never happen */
++    if (u->upstream_buf.start == NULL) {
++        p = ngx_pnalloc(c->pool, pcps->buffer_size);
++        if (p == NULL) {
++            return NGX_ERROR;
++        }
++
++        u->upstream_buf.start = p;
++        u->upstream_buf.end = p + pcps->buffer_size;
++        u->upstream_buf.pos = p;
++        u->upstream_buf.last = p;
++    }
++
++    u->upload_rate = ngx_stream_complex_value_size(s, up_rate, 0);
++    u->download_rate = ngx_stream_complex_value_size(s, down_rate, 0);
++
++    u->connected = 1;
++
++    pc->read->handler = pcps->proxy_upstream_handler;
++    pc->write->handler = pcps->proxy_upstream_handler;
++
++    if (pc->read->ready) {
++        ngx_post_event(pc->read, &ngx_posted_events);
++    }
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_rechoose_peer(ngx_stream_session_t *s,
++    ngx_stream_quic_lb_proxy_call_params_t *pcps)
++{
++    ngx_int_t                     rc;
++    ngx_connection_t             *pc;
++    ngx_connection_t             *c;
++    ngx_stream_upstream_t        *u;
++
++    c = s->connection;
++    u = s->upstream;
++
++    /* close last peer connection socket and free related timer */
++    pc = u->peer.connection;
++    ngx_close_connection(pc);
++    u->peer.connection = NULL;
++
++    /* connect to the new peer */
++    rc = ngx_event_connect_peer(&u->peer);
++
++    ngx_log_debug1(NGX_LOG_DEBUG_STREAM, c->log, 0, "QUIC-LB rechoose peer,"
++        "proxy connect: %i", rc);
++
++    if (rc == NGX_ERROR) {
++        return NGX_ERROR;
++    }
++
++    u->state->peer = u->peer.name;
++
++    if (rc == NGX_BUSY) {
++        ngx_log_error(NGX_LOG_ERR, c->log, 0, "QUIC-LB no live upstreams");
++        return NGX_ERROR;
++    }
++
++    if (rc == NGX_DECLINED) {
++        return NGX_ERROR;
++    }
++
++    pc = u->peer.connection;
++
++    pc->data = s;
++    pc->log = c->log;
++    pc->pool = c->pool;
++    pc->read->log = c->log;
++    pc->write->log = c->log;
++
++    if (rc != NGX_AGAIN) {
++        return ngx_stream_quic_lb_reinit_upstream(s, pcps);
++    }
++
++    pc->read->handler = pcps->connect_handler;
++    pc->write->handler =  pcps->connect_handler;
++
++    ngx_add_timer(pc->write, pcps->connect_timeout);
++
++    return NGX_OK;
++}
++
++
++ngx_int_t
++ngx_stream_quic_lb_downstream_pkt_send_process(void *s_,
++    ngx_stream_quic_lb_proxy_call_params_t *pcps)
++{
++    ngx_stream_upstream_rr_peer_data_t *rrp;
++    ngx_int_t                           rc;
++    ngx_connection_t                   *c;
++    ngx_stream_upstream_t              *u;
++    ngx_stream_quic_lb_srv_conf_t      *qlscf;
++
++    ngx_stream_session_t *s = s_;
++
++    c = s->connection;
++    u = s->upstream;
++    rrp = u->peer.data;
++
++    qlscf = ngx_stream_get_module_srv_conf(s, ngx_stream_quic_lb_module);
++
++    if (ngx_stream_quic_lb_parse_header_from_buf(s->pkt, pcps->out->buf, c,
++        qlscf->quic_lb_conf) != NGX_OK)
++    {
++        ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++            "QUIC-LB, recv packet does not follow quic packet format");
++        return NGX_ERROR;
++    }
++
++    s->quic_lb_conf = &qlscf->quic_lb_conf[s->pkt->conf_id];
++
++    ngx_quic_hexdump(c->pool->log, "last sid is", rrp->pkt->sid.data, rrp->pkt->sid.len);
++    ngx_quic_hexdump(c->pool->log, "curr sid is", s->pkt->sid.data, s->pkt->sid.len);
++
++    /* sid include conf rotation byte, we only compare sid */
++    if (ngx_strncmp(s->pkt->sid.data, rrp->pkt->sid.data,
++                    s->quic_lb_conf->sid_len) != 0)
++    {
++        rrp->pkt->dcid.len = s->pkt->dcid.len;
++        rrp->pkt->sid.len = s->pkt->sid.len;
++        ngx_memcpy(rrp->pkt->dcid.data, s->pkt->dcid.data, s->pkt->dcid.len);
++        ngx_memcpy(rrp->pkt->sid.data, s->pkt->sid.data, s->pkt->sid.len);
++        rrp->pkt->conf_id = s->pkt->conf_id;
++        rrp->quic_lb_conf = s->quic_lb_conf;
++
++        /* for initial pkt, do retry service, draft 04, chapter 6. */
++        if (rrp->quic_lb_conf->valid && rrp->pkt->initial_pkt) {
++            ngx_int_t res = ngx_stream_quic_lb_do_retry_service(qlscf, s->pkt, c);
++            if (res == NGX_OK) {
++                ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                              "QUIC-LB, retry service, pass source "
++                                  "address token validation.");
++            } else {
++                ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                              "QUIC-LB, do retry service failed, return.");
++                return NGX_ERROR;
++            }
++        }
++
++        rc = ngx_stream_quic_lb_rechoose_peer(s, pcps);
++        if (rc != NGX_OK) {
++            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++                          "QUIC-LB, choose peer and send has error");
++            return NGX_DECLINED;
++        }
++    }
++
++    if (qlscf->quic_lb_proxy_protocol) {
++        ngx_int_t ret = ngx_stream_quic_lb_add_proxy_protocol(s);
++        if (ret != NGX_OK) {
++            return NGX_ERROR;
++        }
++    }
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_header_from_buf(ngx_quic_header_t *pkt, ngx_buf_t *buf,
++    ngx_connection_t *c, ngx_quic_lb_conf_t *conf_list)
++{
++    ngx_int_t sid_len, conf_id;
++
++    ngx_memzero(pkt, sizeof(ngx_quic_header_t));
++    pkt->raw = buf;
++    pkt->data = buf->pos;
++    pkt->len = buf->last - buf->pos;
++    pkt->log = c->pool->log;
++    pkt->flags = buf->pos[0];
++
++    if (ngx_quic_long_pkt(pkt->flags)) {
++        if (ngx_stream_quic_lb_parse_long_header(pkt) != NGX_OK) {         // long-header 解析出完整的dcid scid
++            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++                          "QUIC-LB, recv invalid long header packet.");
++            return NGX_ERROR;
++        }
++
++        if (ngx_quic_pkt_in(pkt->flags)) {
++            pkt->initial_pkt = 1;
++            /* get token*/
++            if (ngx_quic_parse_initial_header(pkt) != NGX_OK) {            // 解析出token
++                ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++                              "QUIC-LB, recv invalid initial packet.");
++                return NGX_ERROR;
++            }
++        }
++    } else if (ngx_quic_short_pkt(pkt->flags)) {
++        /* we just read configuration rotate 2 bit to pkt->dcid.data for later process */
++        if (ngx_stream_quic_lb_parse_short_header_conf_bit(pkt) != NGX_OK) {   // short-header 解析出dcid 只取首字节
++            return NGX_ERROR;
++        }
++    } else {
++        return NGX_ERROR;
++    }
++
++    /* Todo: for some init packet, cid would be random, how to recognized them */
++    conf_id = ngx_stream_quic_lb_parse_config_rotation_bit(pkt);           // 取dcid 首字节的高两位 [0, 3]
++    if (conf_id < NGX_QUIC_LB_CONF_ID_MIN || conf_id > NGX_QUIC_LB_CONF_ID_MAX) {
++        ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++            "QUIC-LB, recv packet config rotation bit have problems");
++        return NGX_ERROR;
++    }
++
++    pkt->conf_id = conf_id;
++    sid_len = conf_list[conf_id].sid_len;                                  // 配置的sid长度 // 4200行
++    if (sid_len > NGX_QUIC_CID_LEN_MAX - 1 || sid_len < 0) {               // 配置20 字节竟然不行!!!
++        ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++            "QUIC-LB, sid_len in current conf of short header packet has problem");
++        return NGX_ERROR;
++    }
++
++    if (sid_len == 0) {                                                    // 如果根据该包的dcid首字节前两位取的配置中 没有设置sid_len 那么与dcid长度保持一致
++        if (ngx_quic_short_pkt(pkt->flags)) {
++            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++                "QUIC-LB, short packet mismatch config file, drop it");
++            return NGX_ERROR;
++        }
++
++        /*
++         * for long header packet, if config rotation bit mistach config file,
++         * then we route it by dcid
++         */
++        sid_len = pkt->dcid.len;
++    }
++
++
++    if (ngx_quic_short_pkt(pkt->flags)) {
++        /*
++         * for short header packet, now we read sid_len data to pkt.dcid. Actually that's
++         * enough for route. remember we need read first oct and sid
++         */
++        if (ngx_stream_quic_lb_parse_short_header_with_fix_dcid_len(pkt,
++                sid_len + 1) != NGX_OK) {
++            return NGX_ERROR;
++        }
++    }
++
++    /* record dest sid, sid was composed by first byte and sid */
++    pkt->sid.len = sid_len;
++    pkt->sid.data = &pkt->dcid.data[1];                                    // eg: long-header   长度为配置中所配 sid为 dcid[1~] 即去掉首字节
++
++    /*
++     * pkt parse will change the buf->pos, actually we only need parse result,
++     * so we change buf->pos to origin pos(pkt->data)
++     */
++    buf->pos = pkt->data;
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_short_header_conf_bit(ngx_quic_header_t *pkt)                 // 解析出dcid 只取首字节
++{
++    return ngx_stream_quic_lb_parse_short_header_with_fix_dcid_len(pkt, 1);            // 解析出dcid 只取首字节
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_short_header_with_fix_dcid_len(ngx_quic_header_t *pkt,        // 解析出dcid 只取固定字节数
++    ngx_int_t dcid_len)
++{
++    u_char  *p, *end;
++
++    p = pkt->data;
++    end = pkt->data + pkt->len;
++
++#ifdef NGX_QUIC_DEBUG_PACKETS
++    ngx_quic_hexdump(pkt->log, "QUIC-LB, quic short packet in", pkt->data, pkt->len);
++#endif
++
++    p = ngx_quic_read_uint8(p, end, &pkt->flags);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read flags");
++        return NGX_ERROR;
++    }
++
++    if (!ngx_quic_short_pkt(pkt->flags)) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0, "QUIC-LB, quic not a short packet");
++        return NGX_ERROR;
++    }
++
++    ngx_log_debug1(NGX_LOG_DEBUG_EVENT, pkt->log, 0,
++                   "QUIC-LB, quic short packet flags:%xi", pkt->flags);
++
++    if (!(pkt->flags & NGX_QUIC_PKT_FIXED_BIT)) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0, "QUIC-LB, quic fixed bit is not set");
++        return NGX_DECLINED;
++    }
++
++    /* we just read */
++    pkt->dcid.len = dcid_len;
++
++    p = ngx_quic_read_bytes(p, end, pkt->dcid.len, &pkt->dcid.data);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read dcid");
++        return NGX_ERROR;
++    }
++
++    pkt->raw->pos = p;
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_long_header(ngx_quic_header_t *pkt)
++{
++    u_char  *p, *end;
++    uint8_t  idlen;
++
++    p = pkt->data;
++    end = pkt->data + pkt->len;
++
++#ifdef NGX_QUIC_DEBUG_PACKETS
++    ngx_quic_hexdump(pkt->log, "QUIC-LB, quic long packet in", pkt->data, pkt->len);
++#endif
++
++    p = ngx_quic_read_uint8(p, end, &pkt->flags);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read flags");
++        return NGX_ERROR;
++    }
++
++    if (!ngx_quic_long_pkt(pkt->flags)) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0, "QUIC-LB, not a quic long packet");
++        return NGX_ERROR;
++    }
++
++    p = ngx_quic_read_uint32(p, end, &pkt->version);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read version");
++        return NGX_ERROR;
++    }
++
++    ngx_log_debug2(NGX_LOG_DEBUG_EVENT, pkt->log, 0,
++                   "QUIC-LB, quic long packet flags:%xi version:%xD",
++                   pkt->flags, pkt->version);
++
++    if (!(pkt->flags & NGX_QUIC_PKT_FIXED_BIT)) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0, "QUIC-LB, quic fixed bit is not set");
++        return NGX_DECLINED;
++    }
++
++    if (pkt->version != NGX_QUIC_VERSION) {
++        /*
++         * todo: NGX_QUIC_VERSION constraint
++         */
++    }
++
++    p = ngx_quic_read_uint8(p, end, &idlen);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read dcid len");
++        return NGX_ERROR;
++    }
++
++    if (idlen > NGX_QUIC_CID_LEN_MAX) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet dcid is too long");
++        return NGX_ERROR;
++    }
++
++    pkt->dcid.len = idlen;
++
++    p = ngx_quic_read_bytes(p, end, idlen, &pkt->dcid.data);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read dcid");
++        return NGX_ERROR;
++    }
++
++    p = ngx_quic_read_uint8(p, end, &idlen);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read scid len");
++        return NGX_ERROR;
++    }
++
++    if (idlen > NGX_QUIC_CID_LEN_MAX) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet scid is too long");
++        return NGX_ERROR;
++    }
++
++    pkt->scid.len = idlen;
++
++    p = ngx_quic_read_bytes(p, end, idlen, &pkt->scid.data);
++    if (p == NULL) {
++        ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
++                      "QUIC-LB, quic packet is too small to read scid");
++        return NGX_ERROR;
++    }
++
++    pkt->raw->pos = p;
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_config_rotation_bit(ngx_quic_header_t *pkt)       // 取dcid 首字节的高两位
++{
++    uint8_t   conf_id = 0;
++    u_char   *p;
++
++    p = pkt->dcid.data;
++    conf_id = (p[0] & 0xc0) >> 6;
++    return (ngx_int_t)conf_id;
++}
++
++
++static u_char *
++ngx_stream_quic_lb_proxy_protocol_write(ngx_connection_t *c, u_char *buf, u_char *last)
++{
++    ngx_uint_t  port, lport;
++
++    if (last - buf < NGX_PROXY_PROTOCOL_MAX_HEADER) {
++        return NULL;
++    }
++
++    if (ngx_connection_local_sockaddr(c, NULL, 0) != NGX_OK) {
++        return NULL;
++    }
++
++    if (c->sockaddr->sa_family == AF_INET6) {
++        buf = ngx_cpymem(buf, "PROXY QUICV6 ", sizeof("PROXY QUICV6 ") - 1);
++    } else {
++        buf = ngx_cpymem(buf, "PROXY QUICV4 ", sizeof("PROXY QUICV4 ") - 1);
++    }
++
++    buf += ngx_sock_ntop(c->sockaddr, c->socklen, buf, last - buf, 0);
++
++    *buf++ = ' ';
++
++    buf += ngx_sock_ntop(c->local_sockaddr, c->local_socklen, buf, last - buf, 0);
++
++    port = ngx_inet_get_port(c->sockaddr);
++    lport = ngx_inet_get_port(c->local_sockaddr);
++
++    return ngx_slprintf(buf, last, " %ui %ui" CRLF, port, lport);
++}
++
++
++static char *
++ngx_stream_quic_lb_proxy_read_conf_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
++{
++    ngx_stream_quic_lb_srv_conf_t     *qlscf = conf;
++    ngx_str_t                         *value;
++
++    value = cf->args->elts;
++    if (cf->args->nelts != 2) {
++        return "only one quic lb conf file needed";
++    }
++
++    if (ngx_stream_quic_lb_parse_json_conf_file(cf, &(value[1]),
++        qlscf->quic_lb_conf) != NGX_OK)
++    {
++        return "quic lb conf file have problem";
++    }
++
++    return NGX_CONF_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_json_conf_file(ngx_conf_t *cf, ngx_str_t *name,
++    ngx_quic_lb_conf_t *quic_lb_conf)
++{
++    ngx_file_t                  file;
++    ngx_file_info_t             fi;
++    ngx_int_t                   rc, i;
++    size_t                      size;
++    u_char                     *buf;
++    ssize_t                     n;
++    ngx_err_t                   err;
++
++    for (i = 0; i < NGX_QUIC_LB_VALID_CONF_NUM; i++) {
++        quic_lb_conf[i].unset = 1;
++    }
++
++    rc = NGX_ERROR;
++    ngx_memzero(&file, sizeof(ngx_file_t));
++
++    file.name = *name;
++    file.log = cf->log;
++    file.fd = ngx_open_file(name->data, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
++
++    if (file.fd == NGX_INVALID_FILE) {
++        err = ngx_errno;
++        if (err != NGX_ENOENT) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, err,
++                               ngx_open_file_n " \"%s\" failed", name->data);
++        }
++        goto failed;
++    }
++
++    if (ngx_fd_info(file.fd, &fi) == NGX_FILE_ERROR) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_fd_info_n " \"%s\" failed", name->data);
++        goto failed;
++    }
++
++    size = (size_t) ngx_file_size(&fi);
++
++    if (ngx_file_info(name->data, &fi) == NGX_FILE_ERROR) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_file_info_n " \"%s\" failed", name->data);
++        goto failed;
++    }
++
++    buf = ngx_palloc(cf->pool, size);
++    if (buf == NULL) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" failed", name->data);
++        goto failed;
++    }
++
++    n = ngx_read_file(&file, buf, size, 0);
++
++    if (n == NGX_ERROR) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" failed", name->data);
++        goto failed;
++    }
++
++    if ((size_t) n != size) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, 0,
++                           ngx_read_file_n " \"%s\" returned only %z bytes instead of %z",
++                           name->data, n, size);
++        goto failed;
++    }
++
++    if (ngx_stream_quic_lb_parse_json(cf, quic_lb_conf, buf,                       // 从json文件中解析得 quic_lb_conf
++        size, name) == NGX_ERROR)
++    {
++        goto failed;
++    }
++
++    rc = NGX_OK;
++
++failed:
++    if (ngx_close_file(file.fd) == NGX_FILE_ERROR) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n ngx_close_file_n " \"%s\" failed", name->data);
++    }
++
++    return rc;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_json(ngx_conf_t *cf, ngx_quic_lb_conf_t *quic_lb_conf,    // hankai 4200行
++    u_char *buf, size_t size, ngx_str_t *name)
++{
++    cJSON                       *root;
++    ngx_int_t                    conf_num, i;
++
++    if (cf == NULL || quic_lb_conf == NULL || buf == NULL || name == NULL) {
++        return NGX_ERROR;
++    }
++
++    /* parse json item */
++    root = cJSON_ParseWithLength((const char*)buf, size);
++    if (root == NULL) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file does not "
++                           "follow json format", name->data);
++        goto failed;
++    }
++
++    conf_num = cJSON_GetArraySize(root);
++    if (conf_num <= 0 || conf_num > 3) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file have more "
++                           "than 3 or less than 1 conf item", name->data);
++        goto failed;
++    }
++
++    for (i = 0; i < conf_num; i++) {
++        cJSON     *conf;
++        cJSON     *conf_id, *route_mode, *sid_len;
++        ngx_int_t  conf_index;
++
++        conf = cJSON_GetArrayItem(root, i);
++        if (conf == NULL) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file server_info object "
++                               "read wrong, conf item index is: %d ", name->data, i);
++            goto failed;
++        }
++
++        conf_id = cJSON_GetObjectItem(conf, "conf_id");
++        if (conf_id == NULL) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file does not have json "
++                               "object conf_id, conf item index is: %d", name->data, i);
++            goto failed;
++        }
++
++        route_mode = cJSON_GetObjectItem(conf, "route_mode");
++        if (route_mode == NULL) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file does not have json "
++                               "object route_mode, conf item index is: %d ", name->data, i);
++            goto failed;
++        }
++
++        sid_len = cJSON_GetObjectItem(conf, "sid_len");
++        if (sid_len == NULL) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file does not have json "
++                               "object sid_len, conf item index is: %d ", name->data, i);
++            goto failed;
++        }
++
++        conf_index = conf_id->valueint;
++        if (conf_index < 0 || conf_index > 2) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file conf id error "
++                               "conf item index is: %d  ", name->data, i);
++            goto failed;
++        }
++
++        if (quic_lb_conf[conf_index].unset != 1) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file conf id error "
++                               "conf item has duplicate conf_id ", name->data);
++            goto failed;
++        }
++
++        quic_lb_conf[conf_index].unset = 0;
++
++        /* store json item to quic_lb_conf */
++        quic_lb_conf[conf_index].conf_id = conf_index;
++
++        if (ngx_stream_quic_lb_parse_retry_service_json(cf,                        // json 套json
++            &(quic_lb_conf[conf_index]), conf, name) != NGX_OK) {
++            goto failed;
++        }
++
++        if (ngx_strcmp(route_mode->valuestring, "plaintext") == 0) {
++            quic_lb_conf[conf_index].quic_lb_route_mode = NGX_QUIC_LB_PLAINTEXT;
++        } else if (ngx_strcmp(route_mode->valuestring, "obfuscated") == 0) {
++            quic_lb_conf[conf_index].quic_lb_route_mode = NGX_QUIC_LB_OBFUSCATED;
++        } else if (ngx_strcmp(route_mode->valuestring, "stream_cipher") == 0) {
++            quic_lb_conf[conf_index].quic_lb_route_mode = NGX_QUIC_LB_STREAM_CIPHER;
++        } else if (ngx_strcmp(route_mode->valuestring, "block_cipher") == 0) {
++            quic_lb_conf[conf_index].quic_lb_route_mode = NGX_QUIC_LB_BLOCK_CIPHER;
++        } else {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file route mode does not match"
++                               "any available route mode,conf item index is: %d ",
++                               name->data, i);
++            goto failed;
++        }
++
++        quic_lb_conf[conf_index].sid_len = sid_len->valuedouble;
++        if (quic_lb_conf->sid_len <= 0 || quic_lb_conf->sid_len > NGX_QUIC_CID_LEN_MAX) {
++            ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                               ngx_read_file_n " \"%s\" file sid len was wrong"
++                               "conf item index is: %d", name->data, i);
++            goto failed;
++        }
++
++        quic_lb_conf[conf_index].valid = 1;
++    }
++
++    cJSON_Delete(root);
++    return NGX_OK;
++
++failed:
++    cJSON_Delete(root);
++    return NGX_ERROR;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_parse_retry_service_json(ngx_conf_t *cf,
++    ngx_quic_lb_conf_t *quic_lb_conf, cJSON *root, ngx_str_t *name)
++{
++    cJSON *retry_service_ctx;
++    cJSON *retry_method, *retry_mode, *retry_token_key;
++
++    if (quic_lb_conf == NULL || root == NULL) {
++        return NGX_ERROR;
++    }
++
++    retry_service_ctx = cJSON_GetObjectItem(root, "retry_service_ctx");
++    if (retry_service_ctx == NULL) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file does not have json object retry_service_ctx ", name->data);
++        return NGX_ERROR;
++    }
++
++    retry_method = cJSON_GetObjectItem(retry_service_ctx, "retry_method");
++    if (retry_method == NULL) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file retry_service_ctx object has a wrong item, "
++                           "need \"retry_method\" object ", name->data);
++        return NGX_ERROR;
++    }
++    if (ngx_strcmp(retry_method->valuestring, "shared_state") == 0) {
++        quic_lb_conf->retry_service.retry_method = NGX_QUIC_LB_RETRY_SHARED_STATE;
++    } else if (ngx_strcmp(retry_method->valuestring, "no_state") == 0) {
++        quic_lb_conf->retry_service.retry_method = NGX_QUIC_LB_RETRY_NO_SHARE_STATE;
++    } else {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file retry_service_ctx method "
++                           "should be \"shared_state or no_state\" ", name->data);
++        return NGX_ERROR;
++    }
++
++    retry_mode = cJSON_GetObjectItem(retry_service_ctx, "retry_mode");
++    if (retry_mode == NULL) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file retry_service_ctx object has a wrong item, "
++                           "need \"retry_mode\" object ", name->data);
++        return NGX_ERROR;
++    }
++    if (ngx_strcmp(retry_mode->valuestring, "inactive") == 0) {
++        quic_lb_conf->retry_service.retry_mode = NGX_QUIC_LB_RETRY_INACTIVE_MODE;
++    } else if (ngx_strcmp(retry_mode->valuestring, "active") == 0) {
++        quic_lb_conf->retry_service.retry_mode = NGX_QUIC_LB_RETRY_ACTIVE_MODE;
++    } else {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file retry_service_ctx state "
++						   "should be \"inactive or active\" ", name->data);
++        return NGX_ERROR;
++    }
++
++    retry_token_key = cJSON_GetObjectItem(retry_service_ctx, "retry_token_key");
++    if (retry_token_key == NULL) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file retry_service_ctx object has a wrong item, "
++						   "need \"retry_token_key\" object ", name->data);
++        return NGX_ERROR;
++    }
++
++    /* token use AES-256 encrypt, key length should always be 32 */
++    if (ngx_strlen(retry_token_key->valuestring) != 32) {
++        ngx_conf_log_error(NGX_LOG_CRIT, cf, ngx_errno,
++                           ngx_read_file_n " \"%s\" file retry_service_ctx object has a wrong item, "
++						   "\"retry_token_key\" should be 32", name->data);
++        return NGX_ERROR;
++    }
++
++    ngx_memcpy(quic_lb_conf->retry_service.retry_token_key,
++               retry_token_key->valuestring, 32);
++
++    return NGX_OK;
++}
++
++
++static void *
++ngx_stream_quic_lb_create_srv_conf(ngx_conf_t *cf)
++{
++    ngx_stream_quic_lb_srv_conf_t  *conf;
++
++    conf = ngx_pcalloc(cf->pool, sizeof(ngx_stream_quic_lb_srv_conf_t));
++    if (conf == NULL) {
++        return NULL;
++    }
++
++    conf->quic_lb_proxy_protocol = NGX_CONF_UNSET;
++
++    return conf;
++}
++
++
++static char *
++ngx_stream_quic_lb_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
++{
++    ngx_stream_quic_lb_srv_conf_t *prev = parent;
++    ngx_stream_quic_lb_srv_conf_t *conf = child;
++
++    ngx_conf_merge_value(conf->quic_lb_proxy_protocol,
++                         prev->quic_lb_proxy_protocol, 0);
++
++    return NGX_CONF_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_handler(ngx_stream_session_t *s)
++{
++    ngx_connection_t  *c;
++
++    c = s->connection;
++
++    if (c->proxy_quic) {
++        ngx_stream_quic_lb_srv_conf_t  *qlscf;
++
++        qlscf = ngx_stream_get_module_srv_conf(s, ngx_stream_quic_lb_module);
++        if (s->pkt == NULL) {
++            s->pkt = ngx_palloc(c->pool, sizeof(ngx_quic_header_t));
++        }
++
++        if (s->pkt == NULL) {
++            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++                "QUIC-LB, quic header packet alloc faild");
++            return NGX_ERROR;
++        }
++
++        if (ngx_stream_quic_lb_parse_header_from_buf(s->pkt,                       // 从header头中 找到相应配置 重构一个新的pkt->sid.data|len
++                c->buffer, c, qlscf->quic_lb_conf) != NGX_OK)
++        {
++            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
++                "QUIC-LB, recv packet does not follow quic packet format");
++            return NGX_ERROR;
++        }
++
++        s->quic_lb_conf = &qlscf->quic_lb_conf[s->pkt->conf_id];                   // 4200
++
++        /* for initial pkt, do retry service, draft 04, chapter 6. */
++        if (s->quic_lb_conf->valid && s->pkt->initial_pkt) {
++            ngx_int_t res = ngx_stream_quic_lb_do_retry_service(qlscf, s->pkt, c); // 收到init包 则给客户端反一个retry包
++            if (res == NGX_OK) {
++                ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                              "QUIC-LB, retry service, pass source "
++                              "address token validation.");
++            } else {
++                ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                              "QUIC-LB, do retry service failed, return.");
++                return NGX_ERROR;
++            }
++        }
++    }
++
++    return NGX_DECLINED;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_init(ngx_conf_t *cf)
++{
++    ngx_stream_handler_pt        *h;
++    ngx_stream_core_main_conf_t  *cmcf;
++
++    cmcf = ngx_stream_conf_get_module_main_conf(cf, ngx_stream_core_module);
++
++    h = ngx_array_push(&cmcf->phases[NGX_STREAM_ACCESS_PHASE].handlers);
++    if (h == NULL) {
++        return NGX_ERROR;
++    }
++
++    *h = ngx_stream_quic_lb_handler;
++
++    return NGX_OK;
++}
++
++
++ngx_quic_header_t *
++ngx_stream_quic_lb_gen_copy_pkt(ngx_connection_t *c, ngx_quic_header_t *src)
++{
++    ngx_quic_header_t *pkt;
++
++    pkt = ngx_palloc(c->pool, sizeof(ngx_quic_header_t));
++
++    if (pkt == NULL) {
++        return NULL;
++    }
++
++    /* just copy what we need */
++    pkt->dcid.data = ngx_palloc(c->pool, src->dcid.len);
++    pkt->sid.data = ngx_palloc(c->pool, src->sid.len);
++    if (pkt->dcid.data == NULL || pkt->sid.data == NULL) {
++        return NULL;
++    }
++    pkt->dcid.len = src->dcid.len;
++    pkt->sid.len = src->sid.len;
++    ngx_memcpy(pkt->dcid.data, src->dcid.data, src->dcid.len);
++    ngx_memcpy(pkt->sid.data, src->sid.data, src->sid.len);
++    pkt->conf_id = src->conf_id;
++
++    return pkt;
++}
+diff --git a/src/stream/quic_lb/ngx_stream_quic_lb_module.h b/src/stream/quic_lb/ngx_stream_quic_lb_module.h
+new file mode 100644
+index 0000000..ec3878c
+--- /dev/null
++++ b/src/stream/quic_lb/ngx_stream_quic_lb_module.h
+@@ -0,0 +1,65 @@
++
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: william.zk
++ */
++
++
++#ifndef _NGX_STREAM_QUIC_LB_MODULE_H_INCLUDED_
++#define _NGX_STREAM_QUIC_LB_MODULE_H_INCLUDED_
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_stream.h>
++#include <cJSON.h>
++
++
++#define NGX_QUIC_LB_VALID_CONF_NUM  4
++#define NGX_QUIC_LB_CONF_ID_MAX     3
++#define NGX_QUIC_LB_CONF_ID_MIN     0
++
++
++typedef enum {
++    NGX_QUIC_LB_PLAINTEXT = 1,
++    NGX_QUIC_LB_OBFUSCATED,
++    NGX_QUIC_LB_STREAM_CIPHER,
++    NGX_QUIC_LB_BLOCK_CIPHER
++} ngx_quic_lb_route_mode_e;
++
++
++typedef struct {
++    ngx_int_t                   unset;
++    ngx_flag_t                  valid;
++    ngx_int_t                   conf_id;
++    ngx_quic_lb_route_mode_e    quic_lb_route_mode;
++    ngx_int_t                   sid_len;
++    ngx_rbtree_t                sid_info_tree;
++    ngx_rbtree_node_t           sentinel;
++    ngx_quic_lb_retry_service_t retry_service;
++} ngx_quic_lb_conf_t;
++
++
++typedef struct {
++    ngx_quic_lb_conf_t               quic_lb_conf[NGX_QUIC_LB_VALID_CONF_NUM];
++    ngx_flag_t                       quic_lb_proxy_protocol;
++} ngx_stream_quic_lb_srv_conf_t;
++
++
++typedef struct {
++    ngx_msec_t                  connect_timeout;
++    size_t                      buffer_size;
++    void                       *up_rate;
++    void                       *down_rate;
++    ngx_event_handler_pt        connect_handler;
++    ngx_event_handler_pt        proxy_upstream_handler;
++    ngx_chain_t                *out;
++} ngx_stream_quic_lb_proxy_call_params_t;
++
++extern ngx_module_t  ngx_stream_proxy_module;
++ngx_int_t ngx_stream_quic_lb_add_proxy_protocol(void *s_);
++ngx_int_t ngx_stream_quic_lb_downstream_pkt_send_process(void *s_,
++    ngx_stream_quic_lb_proxy_call_params_t *pcps);
++ngx_quic_header_t * ngx_stream_quic_lb_gen_copy_pkt(ngx_connection_t *c,
++    ngx_quic_header_t *src);
++#endif
+diff --git a/src/stream/quic_lb/ngx_stream_quic_lb_retry_service.c b/src/stream/quic_lb/ngx_stream_quic_lb_retry_service.c
+new file mode 100644
+index 0000000..f2769b7
+--- /dev/null
++++ b/src/stream/quic_lb/ngx_stream_quic_lb_retry_service.c
+@@ -0,0 +1,700 @@
++
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: Lingtao Kong
++ */
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_stream.h>
++#include <ngx_string.h>
++#include <time.h>
++#include <openssl/aes.h>
++
++#define NGX_QUIC_RETRY_LIFETIME  300000
++
++
++static ngx_int_t ngx_stream_quic_lb_validate_ngx_quic_model_token(
++    ngx_connection_t *c, ngx_quic_header_t *pkt, u_char *key);
++static ngx_int_t ngx_stream_quic_lb_new_ngx_quic_model_token(
++    ngx_connection_t *c, ngx_str_t *token, u_char *key);
++static ngx_int_t ngx_stream_quic_lb_create_retry_packet(ngx_quic_header_t *pkt, ngx_str_t *res);
++static ngx_int_t ngx_stream_quic_lb_tls_seal(const ngx_quic_cipher_t *cipher,
++    ngx_quic_secret_t *s, ngx_str_t *out, u_char *nonce, ngx_str_t *in,
++    ngx_str_t *ad, ngx_log_t *log);
++static ngx_int_t ngx_stream_quic_lb_retry_ciphers(ngx_ssl_conn_t *ssl_conn,
++    ngx_quic_ciphers_t *ciphers);
++static size_t ngx_stream_quic_lb_create_retry_itag(ngx_quic_header_t *pkt,
++   u_char *out, u_char **start);
++static ngx_int_t ngx_stream_quic_lb_process_retry_service_in_shared_state(
++    ngx_quic_lb_conf_t *conf, ngx_connection_t *c, ngx_quic_header_t *pkt);
++static ngx_int_t ngx_stream_quic_lb_gen_and_send_retry_packet(ngx_connection_t *c,
++    ngx_quic_lb_conf_t *qconf, ngx_str_t *cids);
++static ngx_int_t ngx_stream_quic_lb_gen_new_cid(ngx_str_t *new_dcid, ngx_connection_t *c);
++__attribute__((unused)) static ngx_int_t
++ngx_stream_quic_lb_new_shared_state_token(ngx_connection_t *c,
++    ngx_str_t *token, u_char *key, ngx_str_t *cids);
++
++static size_t
++ngx_stream_quic_lb_create_retry_itag(ngx_quic_header_t *pkt, u_char *out,          // retry包格式有点儿老了
++    u_char **start)
++{
++    u_char  *p;
++    p = out;
++    *p++ = pkt->odcid.len;
++    p = ngx_cpymem(p, pkt->odcid.data, pkt->odcid.len);
++
++    *start = p;
++
++    *p++ = 0xff;
++
++    p = ngx_quic_write_uint32(p, NGX_QUIC_VERSION);
++
++    *p++ = pkt->dcid.len;
++    p = ngx_cpymem(p, pkt->dcid.data, pkt->dcid.len);
++
++    *p++ = pkt->scid.len;
++    p = ngx_cpymem(p, pkt->scid.data, pkt->scid.len);
++
++    p = ngx_cpymem(p, pkt->token.data, pkt->token.len);
++
++    return p - out;
++}
++
++
++/*
++ * NGX_OK: validate success;
++ * NGX_ERROR: validate failed or token not found.
++ */
++static ngx_int_t
++ngx_stream_quic_lb_process_retry_service_in_shared_state(ngx_quic_lb_conf_t *conf,
++    ngx_connection_t *c, ngx_quic_header_t *pkt)
++{
++    /* If in inactive mode, pass through directly */
++    if (conf->retry_service.retry_mode == NGX_QUIC_LB_RETRY_INACTIVE_MODE) {
++        ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                      "QUIC-LB, retry service, work in inactive mode");
++        return NGX_OK;
++    }
++
++    if (pkt->token.len == 0) {
++        ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                      "QUIC-LB, retry service, token not found");
++        return NGX_ERROR;
++    }
++
++    ngx_int_t rc = ngx_stream_quic_lb_validate_ngx_quic_model_token(c, pkt,        // 解密客户端init包中的token
++        conf->retry_service.retry_token_key);
++    ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                  "QUIC-LB, retry service, validate token:%s, rc:%d",
++                  rc == NGX_OK ? "suc":"failed", rc);
++    return rc;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_gen_and_send_retry_packet(ngx_connection_t *c,
++    ngx_quic_lb_conf_t *qconf, ngx_str_t *cids)
++{
++    ssize_t            len;
++    ngx_str_t          res, token;
++    ngx_quic_header_t  pkt;
++    u_char             buf[NGX_QUIC_RETRY_BUFFER_SIZE];
++
++    ngx_memzero(buf, NGX_QUIC_RETRY_BUFFER_SIZE);
++
++    /* currently, use nginx quic model token format */
++    if (ngx_stream_quic_lb_new_ngx_quic_model_token(                               // 加密client_ip timeout_ms 生产token字段
++        c, &token, qconf->retry_service.retry_token_key)
++        != NGX_OK)
++    {
++        return NGX_ERROR;
++    }
++
++#if 0
++    u_char key_16[16]="0123456789012345";
++    if (ngx_stream_quic_lb_new_shared_state_token(c, &token, key_16, cids) != NGX_OK) {
++        ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                      "QUIC-LB, new shared state token failed.");
++        return NGX_ERROR;
++    }
++#endif
++
++    ngx_memzero(&pkt, sizeof(ngx_quic_header_t));
++    pkt.flags = NGX_QUIC_PKT_FIXED_BIT | NGX_QUIC_PKT_LONG | NGX_QUIC_PKT_RETRY;   // 构造long-header retry包 准备返给客户端
++    pkt.log = c->log;
++
++    /* origin dcid */
++    pkt.odcid = cids[0];
++    /* scid */
++    pkt.dcid = cids[1];                                                            // 构造long-header cid字段
++    /* new dcid */
++    pkt.scid = cids[2];
++
++    pkt.token = token;
++
++    res.data = buf;
++
++    if (ngx_stream_quic_lb_create_retry_packet(&pkt, &res) != NGX_OK) {            // 构造 long-header retry包 (里面有 新的dcid 以及 加密的token)
++        return NGX_ERROR;
++    }
++
++#ifdef NGX_QUIC_DEBUG_PACKETS
++    ngx_quic_hexdump(c->log, "quic packet to send", res.data, res.len);
++#endif
++
++    len = c->send(c, res.data, res.len);
++    if (len == NGX_ERROR || (size_t) len != res.len) {
++        return NGX_ERROR;
++    }
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_validate_ngx_quic_model_token(ngx_connection_t *c,          // 解密token
++    ngx_quic_header_t *pkt, u_char *key)
++{
++    int                      len, tlen, iv_len;
++    u_char                  *iv, *p, *data;
++    ngx_msec_t               msec;
++    EVP_CIPHER_CTX          *ctx;
++    const EVP_CIPHER        *cipher;
++    struct sockaddr_in      *sin;
++#if (NGX_HAVE_INET6)
++    struct sockaddr_in6    *sin6;
++#endif
++    u_char                  tdec[NGX_QUIC_MAX_TOKEN_SIZE];
++
++    cipher = EVP_aes_256_cbc();
++    iv = pkt->token.data;                                                      // 客户端init包中的token
++    iv_len = EVP_CIPHER_iv_length(cipher);
++
++    /* sanity checks */
++
++    if (pkt->token.len < (size_t) iv_len + EVP_CIPHER_block_size(cipher)) {
++        return NGX_ERROR;
++    }
++
++    if (pkt->token.len > (size_t) iv_len + NGX_QUIC_MAX_TOKEN_SIZE) {
++        return NGX_ERROR;
++    }
++
++    ctx = EVP_CIPHER_CTX_new();
++    if (ctx == NULL) {
++        return NGX_ERROR;
++    }
++
++    if (!EVP_DecryptInit_ex(ctx, cipher, NULL, key, iv)) {                     // 4200 配置中的token key  解密 客户端init包中的token
++        EVP_CIPHER_CTX_free(ctx);
++        return NGX_ERROR;
++    }
++
++    p = pkt->token.data + iv_len;
++    len = pkt->token.len - iv_len;
++
++    if (EVP_DecryptUpdate(ctx, tdec, &len, p, len) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        return NGX_ERROR;
++    }
++
++    if (EVP_DecryptFinal_ex(ctx, tdec + len, &tlen) <= 0) {
++        EVP_CIPHER_CTX_free(ctx);
++        return NGX_ERROR;
++    }
++
++    EVP_CIPHER_CTX_free(ctx);
++
++    switch (c->sockaddr->sa_family) {
++
++#if (NGX_HAVE_INET6)
++    case AF_INET6:
++        sin6 = (struct sockaddr_in6 *) c->sockaddr;
++        len = sizeof(struct in6_addr);
++        data = sin6->sin6_addr.s6_addr;
++        break;
++#endif
++
++#if (NGX_HAVE_UNIX_DOMAIN)
++    case AF_UNIX:
++
++        len = ngx_min(c->addr_text.len, NGX_QUIC_MAX_TOKEN_SIZE - sizeof(msec));
++        data = c->addr_text.data;
++        break;
++#endif
++
++    default: /* AF_INET */
++        sin = (struct sockaddr_in *) c->sockaddr;
++
++        len = sizeof(in_addr_t);
++        data = (u_char *) &sin->sin_addr;
++        ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                      "QUIC-LB, retry service, addr value in token is:%d", sin->sin_addr);
++        break;
++    }
++
++    if (ngx_memcmp(tdec, data, len) != 0) {                                    // 解密出来应该是 client_addr + timeout_ms
++        return NGX_ERROR;
++    }
++
++    ngx_memcpy(&msec, tdec + len, sizeof(msec));
++
++    if (ngx_current_msec - msec > NGX_QUIC_RETRY_LIFETIME) {
++        return NGX_ERROR;
++    }
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t ngx_stream_quic_lb_encrypt_token_with_aes_ecb_128(
++    ngx_connection_t *c, u_char *key, ngx_str_t *token,
++    u_char *input, size_t input_len)
++{
++    int res_len = ((input_len + AES_BLOCK_SIZE - 1) /
++        AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
++
++    token->len = res_len;
++    token->data = ngx_pnalloc(c->pool, res_len);
++    if (token->data == NULL) {
++        return NGX_ERROR;
++    }
++
++    memset((void*)token->data, 0, token->len);
++    AES_KEY en_key;
++    AES_set_encrypt_key(key, AES_BLOCK_SIZE * 8, &en_key);
++
++    int len = 0;
++    while(len < res_len) {
++        AES_encrypt(input + len, token->data + len, &en_key);
++        len += AES_BLOCK_SIZE;
++    }
++
++    return NGX_OK;
++}
++
++
++/* format: 1990-08-08T08:08:08Z, total 20B */
++static ngx_int_t ngx_stream_quic_lb_put_timestamp_in_rfc_3339(u_char *output) {
++    time_t now = time(&now);
++    if (now == -1) {
++        return NGX_ERROR;
++    }
++
++    struct tm *ptm = gmtime(&now);
++    if (ptm == NULL) {
++        return NGX_ERROR;
++    }
++
++    int year = ptm->tm_year + 1900;
++    int month = ptm->tm_mon + 1;
++    int day = ptm->tm_mday;
++    int hour = ptm->tm_hour;
++    int min = ptm->tm_min;
++    int sec = ptm->tm_sec;
++
++    u_char s_time_format[32];
++    ngx_snprintf(s_time_format, 32, "%4d-%02d-%02dT%02d:%02d:%02dZ",
++            year, month, day, hour, min, sec);
++    if (strlen((const char*)s_time_format) != 20) {
++        return NGX_ERROR;
++    }
++
++    output = ngx_cpymem(output, s_time_format, strlen((const char*)s_time_format));
++
++    return NGX_OK;
++}
++
++
++/* Format:
++ *  ODCIL(1B)
++ *  RSCIL(1B)
++ *  ODCID(0~20B)
++ *  RSCID(0~20B)
++ *  Client IP (16B, for ipv4, the least 12B all 0)
++ *  Date-time (20B)
++ *  Opaque Data (optional)
++ *
++ * Encryption:
++ *  AES-ECB-128bit
++ */
++__attribute__((unused)) static ngx_int_t
++ngx_stream_quic_lb_new_shared_state_token(ngx_connection_t *c, ngx_str_t *token,
++    u_char *key, ngx_str_t *cids)
++{
++    struct sockaddr_in   *sin;
++    u_char               *data, *p;
++
++#if (NGX_HAVE_INET6)
++    struct sockaddr_in6  *sin6;
++#endif
++
++    ngx_str_t orin_dcid   = cids[0];
++    ngx_str_t retry_scid  = cids[2];
++
++    u_char in[NGX_STREAM_QUIC_LB_MAX_RETRY_TOKEN_SIZE];
++    p = ngx_cpymem(in, &(orin_dcid.len), 1);
++    p = ngx_cpymem(p, orin_dcid.data, orin_dcid.len);
++    p = ngx_cpymem(p, &(retry_scid.len), 1);
++    p = ngx_cpymem(p, retry_scid.data, retry_scid.len);
++
++    switch (c->sockaddr->sa_family) {
++#if (NGX_HAVE_INET6)
++    case AF_INET6:
++        sin6 = (struct sockaddr_in6 *) c->sockaddr;
++        data = sin6->sin6_addr.s6_addr;
++        p = ngx_cpymem(p, data, 16);
++        break;
++#endif
++    default: /* AF_INET */
++        sin = (struct sockaddr_in *) c->sockaddr;
++        data = (u_char *) &sin->sin_addr;
++        p = ngx_cpymem(p, data, 4);
++        p = ngx_cpymem(p, "0", 12);
++        break;
++    }
++
++    if (NGX_STREAM_QUIC_LB_MAX_RETRY_TOKEN_SIZE - (p - in) < 20) {
++        return NGX_ERROR;
++    }
++
++    if (ngx_stream_quic_lb_put_timestamp_in_rfc_3339(p) != NGX_OK) {
++        return NGX_ERROR;
++    }
++
++    /* with aes-ecb-128 encryption */
++    return ngx_stream_quic_lb_encrypt_token_with_aes_ecb_128(
++        c, key, token, in, p - in);
++}
++
++/*
++ * Format: IP_ADDRESS(4B(ipv4)/16B(ipb6)) Timestamp(8B)
++ * Encryption: AES-256-ECB
++ */
++static ngx_int_t
++ngx_stream_quic_lb_new_ngx_quic_model_token(ngx_connection_t *c, ngx_str_t *token, u_char *key)    // 生产token
++{
++    int                   len, iv_len;
++    u_char               *data, *p, *iv;
++    ngx_msec_t            now;
++    EVP_CIPHER_CTX       *ctx;
++    const EVP_CIPHER     *cipher;
++    struct sockaddr_in   *sin;
++#if (NGX_HAVE_INET6)
++    struct sockaddr_in6  *sin6;
++#endif
++    u_char                in[NGX_QUIC_MAX_TOKEN_SIZE];
++
++    switch (c->sockaddr->sa_family) {
++
++#if (NGX_HAVE_INET6)
++    case AF_INET6:
++        sin6 = (struct sockaddr_in6 *) c->sockaddr;
++        len = sizeof(struct in6_addr);
++        data = sin6->sin6_addr.s6_addr;
++        break;
++#endif
++
++#if (NGX_HAVE_UNIX_DOMAIN)
++    case AF_UNIX:
++        len = ngx_min(c->addr_text.len, NGX_QUIC_MAX_TOKEN_SIZE - sizeof(now));
++        data = c->addr_text.data;
++        break;
++#endif
++
++    default: /* AF_INET */
++        sin = (struct sockaddr_in *) c->sockaddr;
++        len = sizeof(in_addr_t);
++        data = (u_char *) &sin->sin_addr;
++
++        break;
++    }
++
++    p = ngx_cpymem(in, data, len);
++
++    now = ngx_current_msec;
++    len += sizeof(now);
++    ngx_memcpy(p, &now, sizeof(now));
++
++    cipher = EVP_aes_256_cbc();
++    iv_len = EVP_CIPHER_iv_length(cipher);
++
++    token->len = iv_len + len + EVP_CIPHER_block_size(cipher);
++    token->data = ngx_pnalloc(c->pool, token->len);
++    if (token->data == NULL) {
++        return NGX_ERROR;
++    }
++
++    ctx = EVP_CIPHER_CTX_new();
++    if (ctx == NULL) {
++        return NGX_ERROR;
++    }
++
++    iv = token->data;
++
++    if (RAND_bytes(iv, iv_len) <= 0
++        || !EVP_EncryptInit_ex(ctx, cipher, NULL, key, iv))
++    {
++        EVP_CIPHER_CTX_free(ctx);
++        return NGX_ERROR;
++    }
++
++    token->len = iv_len;
++
++    if (EVP_EncryptUpdate(ctx, token->data + token->len, &len, in, len) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        return NGX_ERROR;
++    }
++
++    token->len += len;
++
++    if (EVP_EncryptFinal_ex(ctx, token->data + token->len, &len) <= 0) {
++        EVP_CIPHER_CTX_free(ctx);
++        return NGX_ERROR;
++    }
++
++    token->len += len;
++
++    EVP_CIPHER_CTX_free(ctx);
++
++#ifdef NGX_QUIC_DEBUG_PACKETS
++    ngx_quic_hexdump(c->log, "QUIC-LB, quic new token", token->data, token->len);
++#endif
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_create_retry_packet(ngx_quic_header_t *pkt, ngx_str_t *res)
++{
++    u_char              *start;
++    ngx_str_t            ad, itag;
++    ngx_quic_secret_t    secret;
++    ngx_quic_ciphers_t   ciphers;
++
++    /* 5.8.  Retry Packet Integrity */
++    static u_char     key[16] =
++#if (NGX_QUIC_DRAFT_VERSION >= 29)
++        "\xcc\xce\x18\x7e\xd0\x9a\x09\xd0\x57\x28\x15\x5a\x6c\xb9\x6b\xe1";
++#else
++        "\x4d\x32\xec\xdb\x2a\x21\x33\xc8\x41\xe4\x04\x3d\xf2\x7d\x44\x30";
++#endif
++    static u_char     nonce[12] =
++#if (NGX_QUIC_DRAFT_VERSION >= 29)
++        "\xe5\x49\x30\xf9\x7f\x21\x36\xf0\x53\x0a\x8c\x1c";
++#else
++        "\x4d\x16\x11\xd0\x55\x13\xa5\x52\xc5\x87\xd5\x75";
++#endif
++    static ngx_str_t  in = ngx_string("");
++
++    ad.data = res->data;
++    ad.len = ngx_stream_quic_lb_create_retry_itag(pkt, ad.data, &start);           // 构造retry包 裸数据
++
++    itag.data = ad.data + ad.len;
++    itag.len = EVP_GCM_TLS_TAG_LEN;
++
++#ifdef NGX_QUIC_DEBUG_CRYPTO
++    ngx_quic_hexdump(pkt->log, "quic retry itag", ad.data, ad.len);
++#endif
++
++    if (ngx_stream_quic_lb_retry_ciphers(NULL, &ciphers) == NGX_ERROR) {
++        return NGX_ERROR;
++    }
++
++    secret.key.len = sizeof(key);
++    secret.key.data = key;
++    secret.iv.len = sizeof(nonce);
++
++    if (ngx_stream_quic_lb_tls_seal(ciphers.c, &secret, &itag, nonce, &in, &ad, pkt->log)  // 加密裸数据
++        != NGX_OK)
++    {
++        return NGX_ERROR;
++    }
++
++    res->len = itag.data + itag.len - start;
++    res->data = start;
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_tls_seal(const ngx_quic_cipher_t *cipher, ngx_quic_secret_t *s,
++    ngx_str_t *out, u_char *nonce, ngx_str_t *in, ngx_str_t *ad, ngx_log_t *log)
++{
++
++#ifdef OPENSSL_IS_BORINGSSL
++    EVP_AEAD_CTX  *ctx;
++
++    ctx = EVP_AEAD_CTX_new(cipher, s->key.data, s->key.len,
++                           EVP_AEAD_DEFAULT_TAG_LENGTH);
++    if (ctx == NULL) {
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_AEAD_CTX_new() failed");
++        return NGX_ERROR;
++    }
++
++    if (EVP_AEAD_CTX_seal(ctx, out->data, &out->len, out->len, nonce, s->iv.len,
++                          in->data, in->len, ad->data, ad->len)
++        != 1)
++    {
++        EVP_AEAD_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_AEAD_CTX_seal() failed");
++        return NGX_ERROR;
++    }
++
++    EVP_AEAD_CTX_free(ctx);
++#else
++    int              len;
++    EVP_CIPHER_CTX  *ctx;
++
++    ctx = EVP_CIPHER_CTX_new();
++    if (ctx == NULL) {
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_CIPHER_CTX_new() failed");
++        return NGX_ERROR;
++    }
++
++    if (EVP_EncryptInit_ex(ctx, cipher, NULL, NULL, NULL) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_EncryptInit_ex() failed");
++        return NGX_ERROR;
++    }
++
++    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, s->iv.len, NULL)
++        == 0)
++    {
++        EVP_CIPHER_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0,
++                      "EVP_CIPHER_CTX_ctrl(EVP_CTRL_GCM_SET_IVLEN) failed");
++        return NGX_ERROR;
++    }
++
++    if (EVP_EncryptInit_ex(ctx, NULL, NULL, s->key.data, nonce) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_EncryptInit_ex() failed");
++        return NGX_ERROR;
++    }
++
++    if (EVP_EncryptUpdate(ctx, NULL, &len, ad->data, ad->len) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_EncryptUpdate() failed");
++        return NGX_ERROR;
++    }
++
++    if (EVP_EncryptUpdate(ctx, out->data, &len, in->data, in->len) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_EncryptUpdate() failed");
++        return NGX_ERROR;
++    }
++
++    out->len = len;
++
++    if (EVP_EncryptFinal_ex(ctx, out->data + out->len, &len) <= 0) {
++        EVP_CIPHER_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0, "EVP_EncryptFinal_ex failed");
++        return NGX_ERROR;
++    }
++
++    out->len += len;
++
++    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, EVP_GCM_TLS_TAG_LEN,
++                            out->data + in->len)
++        == 0)
++    {
++        EVP_CIPHER_CTX_free(ctx);
++        ngx_ssl_error(NGX_LOG_INFO, log, 0,
++                      "EVP_CIPHER_CTX_ctrl(EVP_CTRL_GCM_GET_TAG) failed");
++        return NGX_ERROR;
++    }
++
++    EVP_CIPHER_CTX_free(ctx);
++
++    out->len += EVP_GCM_TLS_TAG_LEN;
++#endif
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_retry_ciphers(ngx_ssl_conn_t *ssl_conn, ngx_quic_ciphers_t *ciphers)
++{
++    ngx_int_t          len;
++
++#ifdef OPENSSL_IS_BORINGSSL
++    ciphers->c = EVP_aead_aes_128_gcm();
++#else
++    ciphers->c = EVP_aes_128_gcm();
++#endif
++    ciphers->hp = EVP_aes_128_ctr();
++    ciphers->d = EVP_sha256();
++    len = 16;
++
++    return len;
++}
++
++
++static ngx_int_t
++ngx_stream_quic_lb_gen_new_cid(ngx_str_t *new_dcid, ngx_connection_t *c)
++{
++    uint8_t                 len;
++
++    if (RAND_bytes(&len, sizeof(len)) != 1) {
++        return NGX_ERROR;
++    }
++
++    len = len % 10 + 10;
++
++    new_dcid->len = len;
++    new_dcid->data = ngx_pnalloc(c->pool, len);
++    if (new_dcid->data == NULL) {
++        return NGX_ERROR;
++    }
++
++    if (RAND_bytes(new_dcid->data, len) != 1) {
++        return NGX_ERROR;
++    }
++
++    return NGX_OK;
++}
++
++
++ngx_int_t
++ngx_stream_quic_lb_do_retry_service(void *cf, ngx_quic_header_t *pkt,
++    ngx_connection_t *c)
++{
++
++    ngx_stream_quic_lb_srv_conf_t *qlscf = cf;
++    ngx_quic_lb_conf_t *qconf = &qlscf->quic_lb_conf[pkt->conf_id];                        // 4200
++
++    /* get cids */
++    ngx_str_t cids[3];
++    /* origin dcid */
++    cids[0] = pkt->dcid;
++    /* scid */
++    cids[1] = pkt->scid;
++
++    if (ngx_stream_quic_lb_gen_new_cid(&cids[2], c) != NGX_OK) {                           // 此时这个临时cids为 [dcid(原生的) + scid(原生的) + rand]
++        return NGX_ERROR;
++    }
++
++    ngx_int_t rc;
++    if (qconf->retry_service.retry_method == NGX_QUIC_LB_RETRY_SHARED_STATE) {             // 4200
++        rc = ngx_stream_quic_lb_process_retry_service_in_shared_state(qconf, c, pkt);      // 解密客户端init包中的token
++        if (rc != NGX_OK) {                                                                // 校验失败 可能真的是握手首包
++            /* generate retry packet and send */
++            ngx_int_t rc_ = ngx_stream_quic_lb_gen_and_send_retry_packet(c, qconf, cids);  // 发送retry包 等待客户端第二次到来
++            ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
++                          "QUIC-LB, do retry service failed, "
++                              "generate and send new retry packet:%s",
++                          rc_ == NGX_OK ? "suc":"failed");
++        }
++        return rc;
++    } else if (qconf->retry_service.retry_method == NGX_QUIC_LB_RETRY_NO_SHARE_STATE) {
++        /* TODO */
++    }
++
++    /* pass through default */
++    return NGX_OK;
++}
+diff --git a/src/stream/quic_lb/ngx_stream_quic_lb_retry_service.h b/src/stream/quic_lb/ngx_stream_quic_lb_retry_service.h
+new file mode 100644
+index 0000000..4a358d1
+--- /dev/null
++++ b/src/stream/quic_lb/ngx_stream_quic_lb_retry_service.h
+@@ -0,0 +1,42 @@
++
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: Lingtao Kong
++ */
++
++
++#ifndef _NGX_STREAM_QUIC_LB_RETRY_SERVICE_H
++#define _NGX_STREAM_QUIC_LB_RETRY_SERVICE_H
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_stream.h>
++
++
++#define NGX_STREAM_QUIC_LB_MAX_RETRY_TOKEN_SIZE   128
++
++
++typedef enum {
++    NGX_QUIC_LB_RETRY_NO_SHARE_STATE = 1,
++    NGX_QUIC_LB_RETRY_SHARED_STATE
++} ngx_quic_lb_retry_method_e;
++
++
++typedef enum {
++    NGX_QUIC_LB_RETRY_INACTIVE_MODE = 1,
++    NGX_QUIC_LB_RETRY_ACTIVE_MODE
++} ngx_quic_lb_retry_mode_e;
++
++
++typedef struct {
++    ngx_quic_lb_retry_method_e  retry_method;
++    ngx_quic_lb_retry_mode_e    retry_mode;
++    u_char                      retry_token_key[32]; /* AES 256 */
++} ngx_quic_lb_retry_service_t;
++
++
++extern ngx_int_t ngx_stream_quic_lb_do_retry_service(void *,
++    ngx_quic_header_t *pkt, ngx_connection_t *c);
++
++#endif //AFE_NGX_STREAM_QUIC_LB_RETRY_SERVICE_H
+diff --git a/src/stream/quic_lb/ngx_stream_upstream_quic_lb_module.c b/src/stream/quic_lb/ngx_stream_upstream_quic_lb_module.c
+new file mode 100644
+index 0000000..dd2974a
+--- /dev/null
++++ b/src/stream/quic_lb/ngx_stream_upstream_quic_lb_module.c
+@@ -0,0 +1,858 @@
++
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: william.zk
++ */
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_stream.h>
++
++
++typedef struct {
++    uint32_t                              hash;
++    ngx_str_t                            *server;
++} ngx_stream_upstream_quic_lb_chash_point_t;
++
++
++typedef struct {
++    ngx_uint_t                                    number;
++    ngx_stream_upstream_quic_lb_chash_point_t     point[1];
++} ngx_stream_upstream_quic_lb_chash_points_t;
++
++
++typedef struct {
++    ngx_str_t                                     conf;
++    ngx_str_t                                     quic_conf_file[3];
++    ngx_stream_upstream_quic_lb_chash_points_t   *points;
++    ngx_stream_complex_value_t                    key;
++} ngx_stream_upstream_quic_lb_srv_conf_t;
++
++
++typedef struct {
++    /* the round robin data must be first */
++    ngx_stream_upstream_rr_peer_data_t      rrp;
++    ngx_stream_upstream_quic_lb_srv_conf_t  *conf;
++    ngx_str_t                               key;
++    ngx_uint_t                              tries;
++    ngx_uint_t                              rehash;
++    uint32_t                                hash;
++    ngx_event_get_peer_pt                   get_rr_peer;
++} ngx_stream_upstream_quic_lb_peer_data_t;
++
++
++static ngx_int_t ngx_stream_upstream_init_quic_lb_with_sid(ngx_conf_t *cf,
++    ngx_stream_upstream_srv_conf_t *us);
++static char *ngx_stream_upstream_quic_lb_mode(ngx_conf_t *cf,
++    ngx_command_t *cmd, void *conf);
++static void *ngx_stream_upstream_quic_lb_create_conf(ngx_conf_t *cf);
++static char *ngx_stream_upstream_quic_lb_merge_srv_conf(ngx_conf_t *cf,
++    void *parent, void *child);
++static ngx_int_t ngx_stream_upstream_init_quic_lb(ngx_conf_t *cf,
++    ngx_stream_upstream_srv_conf_t *us);
++static ngx_int_t ngx_stream_upstream_init_quic_lb_peer(ngx_stream_session_t *s,
++    ngx_stream_upstream_srv_conf_t *us);
++static ngx_int_t ngx_stream_upstream_get_quic_lb_peer(ngx_peer_connection_t *pc,
++    void *data);
++static ngx_stream_upstream_rr_peer_t * ngx_stream_upstream_quic_lb_get_peer_by_sid(
++    ngx_peer_connection_t *pc, ngx_stream_upstream_rr_peer_data_t *rrp);
++static void ngx_stream_upstream_free_quic_lb_peer(ngx_peer_connection_t *pc, void *data,
++    ngx_uint_t state);
++static int ngx_libc_cdecl ngx_stream_upstream_quic_lb_chash_cmp_points(const void *one,
++    const void *two);
++static ngx_uint_t ngx_stream_upstream_find_chash_point(
++    ngx_stream_upstream_quic_lb_chash_points_t *points, uint32_t hash);
++static ngx_int_t ngx_stream_upstream_quic_lb_get_peer_by_chash(ngx_peer_connection_t *pc,
++    void *data);
++
++
++static ngx_command_t  ngx_stream_quic_lb_commands[] = {
++    { ngx_string("quic_lb_mode"),
++      NGX_STREAM_UPS_CONF|NGX_CONF_NOARGS,
++      ngx_stream_upstream_quic_lb_mode,
++      NGX_STREAM_SRV_CONF_OFFSET,
++      0,
++      NULL },
++
++      ngx_null_command
++};
++
++
++static ngx_stream_module_t  ngx_stream_quic_lb_module_ctx = {
++    NULL,                                  /* preconfiguration */
++    NULL,                                  /* postconfiguration */
++
++    NULL,                                  /* create main configuration */
++    NULL,                                  /* init main configuration */
++
++    ngx_stream_upstream_quic_lb_create_conf,        /* create server configuration */
++    ngx_stream_upstream_quic_lb_merge_srv_conf,     /* merge server configuration */
++};
++
++
++ngx_module_t  ngx_stream_upstream_quic_lb_module = {
++    NGX_MODULE_V1,
++    &ngx_stream_quic_lb_module_ctx,        /* module context */
++    ngx_stream_quic_lb_commands,           /* module directives */
++    NGX_STREAM_MODULE,                     /* module type */
++    NULL,                                  /* init master */
++    NULL,                                  /* init module */
++    NULL,                                  /* init process */
++    NULL,                                  /* init thread */
++    NULL,                                  /* exit thread */
++    NULL,                                  /* exit process */
++    NULL,                                  /* exit master */
++    NGX_MODULE_V1_PADDING
++};
++
++
++static ngx_int_t
++ngx_stream_upstream_init_quic_lb_with_sid(ngx_conf_t *cf,
++    ngx_stream_upstream_srv_conf_t *us)
++{
++    ngx_url_t                                u;
++    ngx_uint_t                               i, j, n, w;
++    ngx_stream_upstream_server_t            *server;
++    ngx_stream_upstream_rr_peer_t           *peer, **peerp;
++    ngx_stream_upstream_rr_peers_t          *peers, *backup;
++
++    if (us->servers) {
++        server = us->servers->elts;
++
++        n = 0;
++        w = 0;
++
++        for (i = 0; i < us->servers->nelts; i++) {
++            if (server[i].backup) {
++                continue;
++            }
++
++            n += server[i].naddrs;
++            w += server[i].naddrs * server[i].weight;
++        }
++
++        if (n == 0) {
++            ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
++                          "QUIC-LB, no servers in upstream \"%V\" in %s:%ui",
++                          &us->host, us->file_name, us->line);
++            return NGX_ERROR;
++        }
++
++        peers = ngx_pcalloc(cf->pool, sizeof(ngx_stream_upstream_rr_peers_t));
++        if (peers == NULL) {
++            return NGX_ERROR;
++        }
++
++        peer = ngx_pcalloc(cf->pool, sizeof(ngx_stream_upstream_rr_peer_t) * n);
++        if (peer == NULL) {
++            return NGX_ERROR;
++        }
++
++        peers->single = (n == 1);
++        peers->number = n;
++        peers->weighted = (w != n);
++        peers->total_weight = w;
++        peers->name = &us->host;
++
++        n = 0;
++        peerp = &peers->peer;
++
++        for (i = 0; i < us->servers->nelts; i++) {
++            if (server[i].backup) {
++                continue;
++            }
++
++            for (j = 0; j < server[i].naddrs; j++) {
++                peer[n].sockaddr = server[i].addrs[j].sockaddr;
++                peer[n].socklen = server[i].addrs[j].socklen;
++                peer[n].name = server[i].addrs[j].name;
++                peer[n].weight = server[i].weight;
++                peer[n].effective_weight = server[i].weight;
++                peer[n].current_weight = 0;
++                peer[n].max_conns = server[i].max_conns;
++                peer[n].max_fails = server[i].max_fails;
++                peer[n].fail_timeout = server[i].fail_timeout;
++                peer[n].down = server[i].down;
++                peer[n].server = server[i].name;
++                peer[n].sid = server[i].sid;
++
++
++                *peerp = &peer[n];
++                peerp = &peer[n].next;
++                n++;
++            }
++        }
++
++        us->peer.data = peers;
++
++        /* backup servers */
++
++        n = 0;
++        w = 0;
++
++        for (i = 0; i < us->servers->nelts; i++) {
++            if (!server[i].backup) {
++                continue;
++            }
++
++            n += server[i].naddrs;
++            w += server[i].naddrs * server[i].weight;
++        }
++
++        if (n == 0) {
++            return NGX_OK;
++        }
++
++        backup = ngx_pcalloc(cf->pool, sizeof(ngx_stream_upstream_rr_peers_t));
++        if (backup == NULL) {
++            return NGX_ERROR;
++        }
++
++        peer = ngx_pcalloc(cf->pool, sizeof(ngx_stream_upstream_rr_peer_t) * n);
++        if (peer == NULL) {
++            return NGX_ERROR;
++        }
++
++        peers->single = 0;
++        backup->single = 0;
++        backup->number = n;
++        backup->weighted = (w != n);
++        backup->total_weight = w;
++        backup->name = &us->host;
++
++        n = 0;
++        peerp = &backup->peer;
++
++        for (i = 0; i < us->servers->nelts; i++) {
++            if (!server[i].backup) {
++                continue;
++            }
++
++            for (j = 0; j < server[i].naddrs; j++) {
++                peer[n].sockaddr = server[i].addrs[j].sockaddr;
++                peer[n].socklen = server[i].addrs[j].socklen;
++                peer[n].name = server[i].addrs[j].name;
++                peer[n].weight = server[i].weight;
++                peer[n].effective_weight = server[i].weight;
++                peer[n].current_weight = 0;
++                peer[n].max_conns = server[i].max_conns;
++                peer[n].max_fails = server[i].max_fails;
++                peer[n].fail_timeout = server[i].fail_timeout;
++                peer[n].down = server[i].down;
++                peer[n].server = server[i].name;
++                peer[n].sid = server[i].sid;
++
++                *peerp = &peer[n];
++                peerp = &peer[n].next;
++                n++;
++            }
++        }
++
++        peers->next = backup;
++
++        return NGX_OK;
++    }
++
++
++    /* an upstream implicitly defined by proxy_pass, etc. */
++
++    if (us->port == 0) {
++        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
++                      "QUIC-LB, no port in upstream \"%V\" in %s:%ui",
++                      &us->host, us->file_name, us->line);
++        return NGX_ERROR;
++    }
++
++    ngx_memzero(&u, sizeof(ngx_url_t));
++
++    u.host = us->host;
++    u.port = us->port;
++
++    if (ngx_inet_resolve_host(cf->pool, &u) != NGX_OK) {
++        if (u.err) {
++            ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
++                          "QUIC-LB, %s in upstream \"%V\" in %s:%ui",
++                          u.err, &us->host, us->file_name, us->line);
++        }
++
++        return NGX_ERROR;
++    }
++
++    n = u.naddrs;
++
++    peers = ngx_pcalloc(cf->pool, sizeof(ngx_stream_upstream_rr_peers_t));
++    if (peers == NULL) {
++        return NGX_ERROR;
++    }
++
++    peer = ngx_pcalloc(cf->pool, sizeof(ngx_stream_upstream_rr_peer_t) * n);
++    if (peer == NULL) {
++        return NGX_ERROR;
++    }
++
++    peers->single = (n == 1);
++    peers->number = n;
++    peers->weighted = 0;
++    peers->total_weight = n;
++    peers->name = &us->host;
++
++    peerp = &peers->peer;
++
++    for (i = 0; i < u.naddrs; i++) {
++        peer[i].sockaddr = u.addrs[i].sockaddr;
++        peer[i].socklen = u.addrs[i].socklen;
++        peer[i].name = u.addrs[i].name;
++        peer[i].weight = 1;
++        peer[i].effective_weight = 1;
++        peer[i].current_weight = 0;
++        peer[i].max_conns = 0;
++        peer[i].max_fails = 1;
++        peer[i].fail_timeout = 10;
++        *peerp = &peer[i];
++        peerp = &peer[i].next;
++    }
++
++    us->peer.data = peers;
++
++    /* implicitly defined upstream has no backup servers */
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_upstream_init_quic_lb(ngx_conf_t *cf, ngx_stream_upstream_srv_conf_t *us)
++{
++    ngx_stream_upstream_rr_peer_t                   *peer;
++    ngx_stream_upstream_rr_peers_t                  *peers;
++    ngx_stream_upstream_quic_lb_chash_points_t      *points;
++    ngx_stream_upstream_quic_lb_srv_conf_t          *qlcf;
++    ngx_uint_t                                       npoints, i, j;
++    u_char                                          *host, *port, c;
++    size_t                                           host_len, port_len, size;
++    uint32_t                                         hash, base_hash;
++    ngx_str_t                                        *server;
++    union {
++        uint32_t  value;
++        u_char    byte[4];
++    } prev_hash;
++
++    if (ngx_stream_upstream_init_quic_lb_with_sid(cf, us) != NGX_OK) {
++        return NGX_ERROR;
++    }
++
++    us->peer.init = ngx_stream_upstream_init_quic_lb_peer;
++
++    peers = us->peer.data;
++    npoints = peers->total_weight * 160;
++
++    size = sizeof(ngx_stream_upstream_quic_lb_chash_points_t)
++           + sizeof(ngx_stream_upstream_quic_lb_chash_point_t) * (npoints - 1);
++
++    points = ngx_palloc(cf->pool, size);
++    if (points == NULL) {
++        return NGX_ERROR;
++    }
++
++    points->number = 0;
++
++    for (peer = peers->peer; peer; peer = peer->next) {
++        server = &peer->server;
++
++        /*
++         * Hash expression is compatible with Cache::Memcached::Fast:
++         * crc32(HOST \0 PORT PREV_HASH).
++         */
++
++        if (server->len >= 5
++            && ngx_strncasecmp(server->data, (u_char *) "unix:", 5) == 0)
++        {
++            host = server->data + 5;
++            host_len = server->len - 5;
++            port = NULL;
++            port_len = 0;
++            goto done;
++        }
++
++        for (j = 0; j < server->len; j++) {
++            c = server->data[server->len - j - 1];
++
++            if (c == ':') {
++                host = server->data;
++                host_len = server->len - j - 1;
++                port = server->data + server->len - j;
++                port_len = j;
++                goto done;
++            }
++
++            if (c < '0' || c > '9') {
++                break;
++            }
++        }
++
++        host = server->data;
++        host_len = server->len;
++        port = NULL;
++        port_len = 0;
++
++    done:
++
++        ngx_crc32_init(base_hash);
++        ngx_crc32_update(&base_hash, host, host_len);
++        ngx_crc32_update(&base_hash, (u_char *) "", 1);
++        ngx_crc32_update(&base_hash, port, port_len);
++
++        prev_hash.value = 0;
++        npoints = peer->weight * 160;
++
++        for (j = 0; j < npoints; j++) {
++            hash = base_hash;
++
++            ngx_crc32_update(&hash, prev_hash.byte, 4);
++            ngx_crc32_final(hash);
++
++            points->point[points->number].hash = hash;
++            points->point[points->number].server = server;
++            points->number++;
++
++#if (NGX_HAVE_LITTLE_ENDIAN)
++            prev_hash.value = hash;
++#else
++            prev_hash.byte[0] = (u_char) (hash & 0xff);
++            prev_hash.byte[1] = (u_char) ((hash >> 8) & 0xff);
++            prev_hash.byte[2] = (u_char) ((hash >> 16) & 0xff);
++            prev_hash.byte[3] = (u_char) ((hash >> 24) & 0xff);
++#endif
++        }
++    }
++
++    ngx_qsort(points->point,
++              points->number,
++              sizeof(ngx_stream_upstream_quic_lb_chash_point_t),
++              ngx_stream_upstream_quic_lb_chash_cmp_points);
++
++    for (i = 0, j = 1; j < points->number; j++) {
++        if (points->point[i].hash != points->point[j].hash) {
++            points->point[++i] = points->point[j];
++        }
++    }
++
++    points->number = i + 1;
++
++    qlcf = ngx_stream_conf_upstream_srv_conf(us,
++                                             ngx_stream_upstream_quic_lb_module);
++    qlcf->points = points;
++
++    return NGX_OK;
++}
++
++
++static int ngx_libc_cdecl
++ngx_stream_upstream_quic_lb_chash_cmp_points(const void *one, const void *two)
++{
++    ngx_stream_upstream_quic_lb_chash_point_t *first =
++        (ngx_stream_upstream_quic_lb_chash_point_t *) one;
++    ngx_stream_upstream_quic_lb_chash_point_t *second =
++        (ngx_stream_upstream_quic_lb_chash_point_t *) two;
++
++    if (first->hash < second->hash) {
++        return -1;
++
++    } else if (first->hash > second->hash) {
++        return 1;
++
++    } else {
++        return 0;
++    }
++}
++
++
++static ngx_uint_t
++ngx_stream_upstream_find_chash_point(ngx_stream_upstream_quic_lb_chash_points_t *points,
++    uint32_t hash)
++{
++    ngx_uint_t                                  i, j, k;
++    ngx_stream_upstream_quic_lb_chash_point_t  *point;
++
++    /* find first point >= hash */
++
++    point = &points->point[0];
++
++    i = 0;
++    j = points->number;
++
++    while (i < j) {
++        k = (i + j) / 2;
++
++        if (hash > point[k].hash) {
++            i = k + 1;
++
++        } else if (hash < point[k].hash) {
++            j = k;
++
++        } else {
++            return k;
++        }
++    }
++
++    return i;
++}
++
++
++static ngx_int_t
++ngx_stream_upstream_init_quic_lb_peer(ngx_stream_session_t *s,
++    ngx_stream_upstream_srv_conf_t *us)
++{
++    ngx_stream_upstream_quic_lb_srv_conf_t   *qlcf;
++    ngx_stream_upstream_quic_lb_peer_data_t  *qlp;
++    uint32_t                                  hash;
++
++    qlcf = ngx_stream_conf_upstream_srv_conf(us,
++                                             ngx_stream_upstream_quic_lb_module);
++
++    qlp = ngx_palloc(s->connection->pool,
++                    sizeof(ngx_stream_upstream_quic_lb_peer_data_t));
++    if (qlp == NULL) {
++        return NGX_ERROR;
++    }
++
++    qlp->rrp.pkt = NULL;
++    qlp->rrp.quic_lb_conf = NULL;
++
++    s->upstream->peer.data = &qlp->rrp;
++
++    if (ngx_stream_upstream_init_round_robin_peer(s, us) != NGX_OK) {
++        return NGX_ERROR;
++    }
++
++    if (ngx_stream_complex_value(s, &qlcf->key, &qlp->key) != NGX_OK) {
++        return NGX_ERROR;
++    }
++
++    /* Todo: only long header packet need this */
++    hash = ngx_crc32_long(qlp->key.data, qlp->key.len);
++
++    ngx_stream_upstream_rr_peers_rlock(qlp->rrp.peers);
++
++    qlp->hash = ngx_stream_upstream_find_chash_point(qlcf->points, hash);
++
++    ngx_stream_upstream_rr_peers_unlock(qlp->rrp.peers);
++
++    ngx_log_debug1(NGX_LOG_DEBUG_STREAM, s->connection->log, 0,
++                   "QUIC-LB, upstream hash key:\"%V\"", &qlp->key);
++
++    s->upstream->peer.get = ngx_stream_upstream_get_quic_lb_peer;
++    s->upstream->peer.free = ngx_stream_upstream_free_quic_lb_peer;
++
++    qlp->conf = qlcf;
++    qlp->tries = 0;
++    qlp->rehash = 0;
++    qlp->get_rr_peer = ngx_stream_upstream_get_round_robin_peer;
++
++    return NGX_OK;
++}
++
++
++static ngx_int_t
++ngx_stream_upstream_get_quic_lb_peer(ngx_peer_connection_t *pc, void *data)
++{
++    ngx_stream_upstream_rr_peer_data_t *rrp = data;
++
++    ngx_stream_upstream_rr_peer_t   *peer;
++    ngx_stream_upstream_rr_peers_t  *peers;
++
++    ngx_log_debug1(NGX_LOG_DEBUG_STREAM, pc->log, 0,
++                   "QUIC-LB, get rr peer, try: %ui", pc->tries);
++
++    pc->connection = NULL;
++
++    peers = rrp->peers;
++    ngx_stream_upstream_rr_peers_wlock(peers);
++
++    if (peers->single) {
++        peer = peers->peer;
++
++        if (peer->down ||
++            (peer->max_conns && peer->conns >= peer->max_conns))
++        {
++            ngx_stream_upstream_rr_peers_unlock(peers);
++            pc->name = peers->name;
++
++            return NGX_BUSY;
++        }
++
++        rrp->current = peer;
++
++    } else {
++        /* there are several peers */
++        peer = ngx_stream_upstream_quic_lb_get_peer_by_sid(pc, rrp);
++
++        /*
++         * if sid match faild, try const hash choose peer
++         */
++        if (peer == NULL) {
++            ngx_stream_upstream_rr_peers_unlock(peers);
++            return ngx_stream_upstream_quic_lb_get_peer_by_chash(pc, data);
++        }
++        ngx_log_debug2(NGX_LOG_DEBUG_STREAM, pc->log, 0,
++                       "QUIC-LB, get quic peer by sid , current: %p %i",
++                       peer, peer->current_weight);
++    }
++
++    pc->sockaddr = peer->sockaddr;
++    pc->socklen = peer->socklen;
++    pc->name = &peer->name;
++
++    peer->conns++;
++
++    ngx_stream_upstream_rr_peers_unlock(peers);
++
++    return NGX_OK;
++}
++
++
++static ngx_stream_upstream_rr_peer_t *
++ngx_stream_upstream_quic_lb_get_peer_by_sid(ngx_peer_connection_t *pc,
++    ngx_stream_upstream_rr_peer_data_t *rrp)
++{
++    ngx_stream_upstream_rr_peer_t  *peer, *best;
++    ngx_quic_lb_conf_t             *quic_lb_conf;
++
++    best = NULL;
++
++    /* for configuration bit '11', we would not use sid route */
++    if (rrp->pkt->conf_id == NGX_QUIC_LB_CONF_ID_MAX) {
++        return best;
++    }
++
++    quic_lb_conf = rrp->quic_lb_conf;
++
++    if (quic_lb_conf->quic_lb_route_mode == NGX_QUIC_LB_PLAINTEXT) {
++        for (peer = rrp->peers->peer; peer; peer = peer->next) {
++            if (ngx_strncmp(&rrp->pkt->dcid.data[1],
++                            peer->sid.data, peer->sid.len) == 0)
++            {
++                best = peer;
++            }
++        }
++    } else if (quic_lb_conf->quic_lb_route_mode == NGX_QUIC_LB_OBFUSCATED) {
++        /* Todo: implemetaion of NGX_QUIC_LB_OBFUSCATED */
++    } else if (quic_lb_conf->quic_lb_route_mode == NGX_QUIC_LB_STREAM_CIPHER) {
++        /* Todo: implemetaion of NGX_QUIC_LB_STREAM_CIPHER */
++    } else if (quic_lb_conf->quic_lb_route_mode == NGX_QUIC_LB_BLOCK_CIPHER) {
++        /* Todo: implemetaion of NGX_QUIC_LB_BLOCK_CIPHER */
++    } else {
++        /* Todo: error process */
++    }
++
++    return best;
++}
++
++
++static ngx_int_t
++ngx_stream_upstream_quic_lb_get_peer_by_chash(ngx_peer_connection_t *pc, void *data)
++{
++    ngx_stream_upstream_quic_lb_peer_data_t      *qlp = data;
++    ngx_stream_upstream_quic_lb_srv_conf_t       *qlcf;
++    time_t                                        now;
++    intptr_t                                      m;
++    ngx_str_t                                    *server;
++    ngx_int_t                                     total;
++    ngx_uint_t                                    i, n, best_i;
++    ngx_stream_upstream_rr_peer_t                *peer, *best;
++    ngx_stream_upstream_quic_lb_chash_point_t    *point;
++    ngx_stream_upstream_quic_lb_chash_points_t   *points;
++
++    ngx_log_debug1(NGX_LOG_DEBUG_STREAM, pc->log, 0,
++                   "QUIC-LB, get consistent hash peer, try: %ui", pc->tries);
++
++    ngx_stream_upstream_rr_peers_wlock(qlp->rrp.peers);
++
++    if (qlp->tries > 20 || qlp->rrp.peers->single || qlp->key.len == 0) {
++        ngx_stream_upstream_rr_peers_unlock(qlp->rrp.peers);
++        return qlp->get_rr_peer(pc, &qlp->rrp);
++    }
++
++    pc->connection = NULL;
++
++    now = ngx_time();
++    qlcf = qlp->conf;
++
++    points = qlcf->points;
++    point = &points->point[0];
++
++    for ( ;; ) {
++        server = point[qlp->hash % points->number].server;
++
++        ngx_log_debug2(NGX_LOG_DEBUG_STREAM, pc->log, 0,
++                       "QUIC-LB, consistent hash peer:%uD, server:\"%V\"",
++                       qlp->hash, server);
++
++        best = NULL;
++        best_i = 0;
++        total = 0;
++
++        for (peer = qlp->rrp.peers->peer, i = 0;
++             peer;
++             peer = peer->next, i++)
++        {
++            n = i / (8 * sizeof(uintptr_t));
++            m = (uintptr_t) 1 << i % (8 * sizeof(uintptr_t));
++
++            if (qlp->rrp.tried[n] & m) {
++                continue;
++            }
++
++            if (peer->down) {
++                continue;
++            }
++
++            if (peer->max_fails
++                && peer->fails >= peer->max_fails
++                && now - peer->checked <= peer->fail_timeout)
++            {
++                continue;
++            }
++
++            if (peer->max_conns && peer->conns >= peer->max_conns) {
++                continue;
++            }
++
++            if (peer->server.len != server->len
++                || ngx_strncmp(peer->server.data, server->data, server->len)
++                   != 0)
++            {
++                continue;
++            }
++
++            peer->current_weight += peer->effective_weight;
++            total += peer->effective_weight;
++
++            if (peer->effective_weight < peer->weight) {
++                peer->effective_weight++;
++            }
++
++            if (best == NULL || peer->current_weight > best->current_weight) {
++                best = peer;
++                best_i = i;
++            }
++        }
++
++        if (best) {
++            best->current_weight -= total;
++            break;
++        }
++
++        qlp->hash++;
++        qlp->tries++;
++
++        if (qlp->tries > 20) {
++            ngx_stream_upstream_rr_peers_unlock(qlp->rrp.peers);
++            return qlp->get_rr_peer(pc, &qlp->rrp);
++        }
++    }
++
++    qlp->rrp.current = best;
++
++    pc->sockaddr = best->sockaddr;
++    pc->socklen = best->socklen;
++    pc->name = &best->name;
++
++    best->conns++;
++
++    if (now - best->checked > best->fail_timeout) {
++        best->checked = now;
++    }
++
++    ngx_stream_upstream_rr_peers_unlock(qlp->rrp.peers);
++
++    n = best_i / (8 * sizeof(uintptr_t));
++    m = (uintptr_t) 1 << best_i % (8 * sizeof(uintptr_t));
++
++    qlp->rrp.tried[n] |= m;
++
++    return NGX_OK;
++}
++
++
++static void *
++ngx_stream_upstream_quic_lb_create_conf(ngx_conf_t *cf)
++{
++    ngx_stream_upstream_quic_lb_srv_conf_t  *conf;
++
++    conf = ngx_palloc(cf->pool, sizeof(ngx_stream_upstream_quic_lb_srv_conf_t));
++    if (conf == NULL) {
++        return NULL;
++    }
++
++    conf->points = NULL;
++
++    return conf;
++}
++
++
++static char *
++ngx_stream_upstream_quic_lb_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
++{
++    ngx_stream_upstream_quic_lb_srv_conf_t *prev = parent;
++    ngx_stream_upstream_quic_lb_srv_conf_t *conf = child;
++    ngx_int_t                               i;
++
++    for (i = 0; i < NGX_QUIC_LB_VALID_CONF_NUM; i++) {
++        ngx_conf_merge_str_value(conf->quic_conf_file[i], prev->quic_conf_file[i], "");
++    }
++
++    return NGX_CONF_OK;
++}
++
++
++static char *
++ngx_stream_upstream_quic_lb_mode(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
++{
++    ngx_stream_upstream_quic_lb_srv_conf_t   *qlcf = conf;
++
++    ngx_stream_upstream_srv_conf_t           *uscf;
++    ngx_stream_compile_complex_value_t        ccv;
++    ngx_str_t                                 value;
++
++    uscf = ngx_stream_conf_get_module_srv_conf(cf, ngx_stream_upstream_module);
++
++    ngx_memzero(&ccv, sizeof(ngx_stream_compile_complex_value_t));
++
++    /* we only support ip:port chash now */
++    value.data = (u_char *)"$remote_addr:$remote_port";
++    value.len = ngx_strlen(value.data);
++
++    ccv.cf = cf;
++    ccv.value = &value;
++    ccv.complex_value = &qlcf->key;
++
++    if (ngx_stream_compile_complex_value(&ccv) != NGX_OK) {
++        return NGX_CONF_ERROR;
++    }
++
++    if (uscf->peer.init_upstream) {
++        ngx_conf_log_error(NGX_LOG_WARN, cf, 0,
++                           "QUIC-LB, load balancing method redefined");
++    }
++
++    uscf->flags = NGX_STREAM_UPSTREAM_CREATE
++                  |NGX_STREAM_UPSTREAM_WEIGHT
++                  |NGX_STREAM_UPSTREAM_MAX_CONNS
++                  |NGX_STREAM_UPSTREAM_MAX_FAILS
++                  |NGX_STREAM_UPSTREAM_FAIL_TIMEOUT
++                  |NGX_STREAM_UPSTREAM_DOWN;
++
++    uscf->peer.init_upstream = ngx_stream_upstream_init_quic_lb;
++
++    return NGX_CONF_OK;
++}
++
++
++static void
++ngx_stream_upstream_free_quic_lb_peer(ngx_peer_connection_t *pc, void *data,
++    ngx_uint_t state)
++{
++   /* Todo: match quic lb algorithm */
++}
+diff --git a/test/Makefile b/test/Makefile
+new file mode 100644
+index 0000000..765853e
+--- /dev/null
++++ b/test/Makefile
+@@ -0,0 +1,41 @@
++TARGET  := liblbtest.so
++
++#compile and lib parameter
++#编译参数
++CC      := gcc
++LIBS    :=
++LDFLAGS := -L../libs/openssl  -lssl -lcrypto  -ldl
++DEFINES :=
++INCLUDE := -I.
++CFLAGS  := -g -Wall -O3 $(DEFINES) $(INCLUDE) -fPIC
++CXXFLAGS:= $(CFLAGS) -DHAVE_CONFIG_H
++SHARE   := -fPIC -shared -o
++
++SOURCE  := $(wildcard *.c) $(wildcard *.cpp)
++OBJS    := $(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SOURCE)))
++
++.PHONY : everything objs clean veryclean rebuild
++
++everything : $(TARGET)
++
++all : $(TARGET)
++
++objs : $(OBJS)
++
++build : $(TARGET)
++
++test :
++	make build
++	pytest quic_lb_test.py
++
++rebuild: veryclean everything
++
++clean :
++	rm -fr *.o
++	rm -fr *.so
++
++veryclean : clean
++	rm -fr $(TARGET)
++
++$(TARGET) : $(OBJS)
++	$(CC) $(CXXFLAGS) $(SHARE) $@ $(OBJS) $(LDFLAGS) $(LIBS)
+diff --git a/test/quic/__init__.py b/test/quic/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/test/quic/quic_base.py b/test/quic/quic_base.py
+new file mode 100644
+index 0000000..8b4ec4f
+--- /dev/null
++++ b/test/quic/quic_base.py
+@@ -0,0 +1,284 @@
++import socket
++import random
++import struct
++import errno
++from ctypes import *
++import ctypes
++
++class QuicBase:
++    _socket = 0
++    src_addr = ""
++    src_port = 0
++    _mtu = 1200
++    _buf = []
++    _draft_version = 29
++    _terminate_tag = False
++    # statistic variabl
++    recv_correct_init_packet_num = 0
++    recv_error_init_packet_num = 0
++    recv_correct_app_packet_num = 0
++    recv_error_app_packet_num = 0
++    recv_error_packet_num = 0
++
++    # cache dcid, used for retry
++    odcid = ""
++    odcid_len = 0
++    retry_recv_packet_with_no_token_num    = 0
++    retry_recv_packet_with_token_num       = 0
++    retry_recv_packet_with_valid_token_num = 0
++    retry_recv_packet_with_invalid_token_num = 0
++
++    def __init__(self, src_addr, src_port):
++        self.src_addr = src_addr
++        self.src_port = src_port
++
++    def quic_sendto(self, data, dst_addr, dst_port):
++        i = 0
++        l = len(data[i:])
++        while i < l:
++            left = l-i
++            if left < self._mtu:
++                left = self._mtu
++            self._socket.sendto(data[i:i+left], (dst_addr, dst_port))
++            i = i+left
++
++    def quic_data_process_handler(self, data, peer_addr):
++        pass
++
++    def quic_recvfrom(self, recv_handler):
++        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
++        self._socket.bind((self.src_addr, self.src_port))
++        self._socket.setblocking(False)
++        while True:
++            try:
++                if (self._terminate_tag == True):
++                    break
++                data, addr = self._socket.recvfrom(32768)
++                if len(data) != 0:
++                    recv_handler(data, addr)
++
++            except IOError as e:
++                if e.errno == errno.EWOULDBLOCK:
++                    pass
++            except Exception as e:
++                print(e)
++        self._socket.close()
++
++    def terminate(self):
++        self._terminate_tag = True
++
++    def singlebyte2int(self, data):
++        ret = struct.unpack('>B', data)
++        return ret[0]
++
++    def quic_packet_is_long_packet(self, data):
++        tag = self.singlebyte2int(data[0])
++        if (tag & 0x80 != 0):
++            return True
++        return False
++
++    def quic_packet_is_retry_packet(self, data):
++        tag = self.singlebyte2int(data[0])
++        if (tag & 0x30 == 0x30):
++            return True
++        return False
++
++    def quic_construct_init_packet(self, token, payload, dcid, scid):
++        pkt = bytearray()
++        # We just mock the whole route progress, so we don't need pkt number and crypto
++        first_byte = 0xc0
++        pkt.append(first_byte)
++
++        version = 0xff000000 + self._draft_version
++        pkt.append((version & 0xffffffff) >> 24)
++        pkt.append((version & 0x00ffffff) >> 16)
++        pkt.append((version & 0x0000ffff) >> 8)
++        pkt.append(version & 0x000000ff)
++
++        dcid_len = 0xff & len(dcid)
++        pkt.append(dcid_len)
++        pkt += bytearray(dcid)
++
++        scid_len = 0xff & len(scid)
++        pkt.append(scid_len)
++        pkt += bytearray(scid)
++
++        token_len = self.quic_variable_length_encoding(token)
++        pkt += token_len
++        pkt += bytearray(token)
++
++        payload_len = self.quic_variable_length_encoding(payload)
++        pkt += payload_len
++        pkt += bytearray(payload)
++
++        return pkt
++
++    def quic_construct_short_header_packet(self, dcid, payload):
++        pkt = bytearray()
++        # We just mock the whole route progress, so we don't need pkt number and crypto
++        first_byte = bytearray([0x40])
++        pkt += first_byte
++
++        pkt += bytearray(dcid)
++        pkt += bytearray(payload)
++        return pkt
++
++    # decribed in https://tools.ietf.org/html/draft-ietf-quic-transport-29#section-16
++    def quic_variable_length_encoding(self, data):
++        len_byte = bytearray()
++        l = len(data)
++        if (l == 0):
++            len_byte += bytearray([0x00])
++        elif(0 < l and l < 64):
++            byte = l & 0xff | 0x00
++            len_byte += bytearray([byte])
++        elif(64 < l and l < 16383):
++            len_byte.append(chr((l & 0xffff | 0x4000) >> 8))
++            len_byte.append(chr(l & 0x00ff))
++        elif(16383 < l and l < 1073741823):
++            len_byte.append(chr((l & 0xffffffff | 0x80000000) >> 24))
++            len_byte.append(chr((l & 0x00ffffff) >> 16))
++            len_byte.append(chr((l & 0x0000ffff) >> 8))
++            len_byte.append(chr(l & 0x000000ff))
++        elif(1073741823 < l):
++            len_byte.append(chr((len & 0xffffffffffffffff | 0xc000000000000000) >> 56))
++            len_byte.append(chr((len & 0x00ffffffffffffff) >> 48))
++            len_byte.append(chr((len & 0x0000ffffffffffff) >> 40))
++            len_byte.append(chr((len & 0x000000ffffffffff) >> 32))
++            len_byte.append(chr((len & 0x00000000ffffffff) >> 24))
++            len_byte.append(chr((len & 0x0000000000ffffff) >> 16))
++            len_byte.append(chr((len & 0x000000000000ffff) >> 8))
++            len_byte.append(chr(len & 0x00000000000000ff))
++        return len_byte
++
++    def quic_validate_token(self, selfaddr, token):
++        tls_verify_lib = CDLL("./liblbtest.so")
++        return tls_verify_lib.test_verify_token(selfaddr, token, len(token))
++
++    def gen_random_bytes(self, len):
++        res = bytearray()
++        for _ in range(0,len):
++            n = random.randint(0, 255)
++            res += bytearray([n])
++        return res
++
++class RetryPacket:
++    retry_token_len = 0
++    retry_token_data = ""
++    retry_tag_data = ""
++    retry_token_tag_len = 16  # fix value
++    retry_data_wo_tag = ""
++    def __init__(self, data):
++        self.parse(data, len(data))
++
++    def singlebyte2int(self, data):
++        ret = struct.unpack('>B', data)
++        return ret[0]
++
++    def parse(self, data, total_len):
++        self.retry_data_wo_tag = data[0: total_len - self.retry_token_tag_len] # wo 16B
++        read_index = 1 # we don't need first byte
++        version = data[read_index:read_index+4]
++        self.version = self.singlebyte2int(version[3])
++        read_index += 4
++        self.dcid_len = self.singlebyte2int(data[read_index:read_index+1])
++        read_index += 1
++        self.dcid = data[read_index:read_index + self.dcid_len]
++        read_index += self.dcid_len
++        self.scid_len = self.singlebyte2int(data[read_index:read_index+1])
++        read_index += 1
++        self.scid = data[read_index:read_index + self.scid_len]
++        read_index += self.scid_len
++        # reach read_index
++        self.retry_token_len = total_len - read_index - self.retry_token_tag_len
++        self.retry_token_data = data[read_index:read_index + self.retry_token_len]
++        self.retry_tag_data = data[total_len - self.retry_token_tag_len:]
++        return
++
++    def pkt_verify_retry_tag(self, odcid, odcid_len):
++        # put odcid, len
++        pseudo_retry_buf = ""
++        pseudo_retry_buf += chr(odcid_len)
++        for i in range (0,odcid_len):
++            pseudo_retry_buf += chr(odcid[i])
++        pseudo_retry_buf += self.retry_data_wo_tag
++        tls_verify_lib = CDLL("./liblbtest.so")
++        tls_verify_lib.test_verify_retry_tag.argtypes = [ctypes.c_char_p, ctypes.c_uint, ctypes.c_char_p]
++        return tls_verify_lib.test_verify_retry_tag(ctypes.c_char_p(pseudo_retry_buf), len(pseudo_retry_buf), self.retry_tag_data)
++
++
++class InitPacket:
++    version = 0
++    scid_len = 0
++    scid = ""
++    dcid_len = 0
++    dcid = ""
++    token_len = 0
++    token = ""
++
++    def __init__(self, data):
++        self.parse(data)
++
++    def parse(self, data):
++        read_index = 1 # we don't need first byte
++        version = data[read_index:read_index+4]
++        self.version = self.singlebyte2int(version[3])
++        read_index += 4
++        self.dcid_len = self.singlebyte2int(data[read_index:read_index+1])
++        read_index += 1
++        self.dcid = data[read_index:read_index + self.dcid_len]
++        read_index += self.dcid_len
++        self.scid_len = self.singlebyte2int(data[read_index:read_index+1])
++        read_index += 1
++        self.scid = data[read_index:read_index + self.scid_len]
++        read_index += self.scid_len
++        self.token_len, offset = self.quic_variable_length_decode(data[read_index:])
++        if (self.token_len == 0):
++            return
++        read_index += offset
++        # validate client token, if faild, return
++        self.token = data[read_index:read_index+self.token_len]
++
++    def singlebyte2int(self, data):
++        ret = struct.unpack('>B', data)
++        return ret[0]
++
++    def quic_variable_length_decode(self, data):
++        first_byte = self.singlebyte2int(data[0])
++        mode = first_byte >> 6
++        l = 0
++        offset = 0
++        if (mode == 0):
++            l = first_byte & 0x3f
++            offset = 1
++        elif (mode == 1):
++            second_byte = self.singlebyte2int(data[1])
++            l = int((first_byte & 0x3f) << 8) | second_byte
++            offset = 2
++        elif (mode == 2):
++            second_byte = self.singlebyte2int(data[1])
++            third_byte = self.singlebyte2int(data[2])
++            fourth_byte = self.singlebyte2int(data[3])
++            l = int((first_byte & 0x3f) << 24 | (second_byte << 16)
++                     | (third_byte << 8) | fourth_byte)
++            offset = 4
++        elif (mode == 3):
++            second_byte = self.singlebyte2int(data[1])
++            third_byte = self.singlebyte2int(data[2])
++            fourth_byte = self.singlebyte2int(data[3])
++            fifth_byte = self.singlebyte2int(data[4])
++            sixth_byte = self.singlebyte2int(data[5])
++            seventh_byte = self.singlebyte2int(data[6])
++            eighth_byte = self.singlebyte2int(data[7])
++            l = int((first_byte & 0x3f) << 56 | (second_byte << 48) | (third_byte << 40)
++                     | (fourth_byte << 32) | (fifth_byte << 24) | (sixth_byte << 16)
++                     | (seventh_byte << 8) | eighth_byte)
++            offset = 8
++
++        return l, offset
++
++
++
++
++
++
+diff --git a/test/quic/quic_client.py b/test/quic/quic_client.py
+new file mode 100644
+index 0000000..d883973
+--- /dev/null
++++ b/test/quic/quic_client.py
+@@ -0,0 +1,41 @@
++import quic_base
++import socket
++
++class QuicClient(quic_base.QuicBase):
++    _migrate_adrr = ""
++    _migrate_port = 0
++    _dst_addr = ""
++    _dst_port = 0
++    token_recved = ""
++    token_mocked = "test_token"
++
++    def __init__(self, src_addr, src_port, migrate_addr, migrate_port,
++                 dst_addr, dst_port):
++        quic_base.QuicBase.__init__(self, src_addr, src_port)
++        self._migrate_adrr = migrate_addr
++        self._migrate_port = migrate_port
++        self._dst_addr = dst_addr
++        self._dst_port = dst_port
++        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
++        self._socket.bind((self.src_addr, self.src_port))
++        self._socket.settimeout(500)
++
++    def recvfrom(self):
++        data, addr = self._socket.recvfrom(32768)
++        return data, addr
++
++    def terminate(self):
++        self._socket.close()
++
++    def addr_migration(self):
++        self._socket.close()
++        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
++        self._socket.bind((self._migrate_adrr, self._migrate_port))
++        self._socket.settimeout(5)
++
++
++
++
++
++
++
+diff --git a/test/quic/quic_server.py b/test/quic/quic_server.py
+new file mode 100644
+index 0000000..24e843d
+--- /dev/null
++++ b/test/quic/quic_server.py
+@@ -0,0 +1,148 @@
++import quic_base
++import threading
++import socket
++import struct
++
++class QuicServer(quic_base.QuicBase, threading.Thread):
++    #_recv_handler = quic_server_data_process_handler
++    _cid_len = 18
++    _sid = ""
++    _sid_len = 0
++    _token = bytearray("test token")
++    _payload = bytearray("test payload")
++    _cid_dict = {}
++    _conf_id = 0
++    _debug_tag = False
++    client_ip = ""
++    proxy_ip = ""
++    client_port = ""
++    proxy_port = ""
++    use_retry = False
++
++    def __init__(self, threadID, src_addr, src_port, sid, conf_id, use_retry):
++        quic_base.QuicBase.__init__(self, src_addr, src_port)
++        threading.Thread.__init__(self)
++        self.threadID = threadID
++        self._sid = sid
++        self._sid_len = len(sid)
++        if (conf_id == 0):
++            self._conf_id = 0x00
++        elif (conf_id == 1):
++            self._conf_id = 0x40
++        elif (conf_id == 2):
++            self._conf_id = 0x80
++        else:
++            raise Exception("Invalid conf id: ", conf_id)
++
++        self.use_retry = use_retry
++
++    def run(self):
++        self.quic_recvfrom(self.quic_server_data_process_handler)
++
++    def quic_packet_is_quic_lb_proxy_protocol(self, data):
++        if data[0:5] == "PROXY":
++            return True
++        return False
++
++    def process_quic_lb_proxy_protocol_header(self, data):
++        str_begin_index = 0
++        move_index = 0
++        tag = 0
++        while (True):
++            if (data[move_index] == ' '):
++                if (tag == 0): #PROXY
++                    str_begin_index = move_index + 1
++                    tag += 1
++                elif (tag == 1): #QUICV4
++                    str_begin_index = move_index + 1
++                    tag += 1
++                elif (tag == 2): #Client IP
++                    self.client_ip = data[str_begin_index:move_index]
++                    str_begin_index = move_index + 1
++                    tag += 1
++                elif (tag == 3): #Proxy IP
++                    self.proxy_ip = data[str_begin_index:move_index]
++                    str_begin_index = move_index + 1
++                    tag += 1
++                elif (tag == 4): #Client Port
++                    self.client_port = data[str_begin_index:move_index]
++                    str_begin_index = move_index + 1
++                    tag += 1
++                elif (tag == 5): #Proxy Port
++                    self.proxy_ip = data[str_begin_index:move_index]
++                    str_begin_index = move_index + 1
++                    tag += 1
++            elif (data[move_index] == '\r' and (data[move_index+1] == '\n')):
++                return move_index+2
++
++            move_index = move_index + 1
++            if (move_index > len(data) - 1):
++                return -1
++        return -1
++
++    def quic_server_data_process_handler(self, data, peer_addr):
++        if len(data) == 0:
++            return
++        if (self.quic_packet_is_quic_lb_proxy_protocol(data)):
++            if self._debug_tag:
++                print("recv quic lb proxy protocol packet")
++            begin_index = self.process_quic_lb_proxy_protocol_header(data)
++            if (begin_index == -1):
++                self.recv_error_packet_num = self.recv_error_packet_num + 1
++            data = data[begin_index:]
++
++        if (self.quic_packet_is_long_packet(data)):
++            if self._debug_tag:
++                print("server %s recv %d long header data, server thread id is %d"
++                    % (self._sid, len(data), self.threadID))
++            init_packet = quic_base.InitPacket(data)
++            if (init_packet.version != self._draft_version):
++                self.recv_error_init_packet_num += 1
++                return
++
++            if self.use_retry:
++                # if no token carried, send retry packet to client
++                if (init_packet.token_len == 0):
++                    self.retry_recv_packet_with_no_token_num += 1
++                    return
++
++                self.retry_recv_packet_with_token_num += 1
++                # Note: the address in token is big-endian
++                ip_int = struct.unpack('@I', socket.inet_aton(peer_addr[0]))[0]
++                res = self.quic_validate_token(ip_int, init_packet.token)
++                print("[server] validate token result:", res)
++                if (res <= 0):
++                    self.retry_recv_packet_with_invalid_token_num += 1
++                    return
++                else:
++                    self.retry_recv_packet_with_valid_token_num += 1
++
++            # if success validate client token, then send an test init packet to client,
++            # just test quic-lb can success foward upstream/downstream packet
++            self.recv_correct_init_packet_num += 1
++            # generate new server id for client dcid
++            rand_len = self._cid_len - self._sid_len - 1
++            server_cid = bytes(bytearray([self._conf_id]) + bytearray(self._sid) +
++                             bytearray(self.gen_random_bytes(rand_len)))
++            if self._debug_tag:
++                print("server gen server_cid is: " , server_cid)
++            self._cid_dict[server_cid] = init_packet.scid
++            # construct init packet and send
++            pkt = self.quic_construct_init_packet(self._token, self._payload, init_packet.scid, server_cid)
++            self.quic_sendto(pkt, peer_addr[0], peer_addr[1])
++        else:
++            if self._debug_tag:
++                print("server %s recv %d short header data, server thread id is %d"
++                      % (self._sid, len(data), self.threadID))
++            server_cid = data[1:1+self._cid_len]
++            if self._debug_tag:
++                print("short header dcid is:", server_cid)
++            if (self._cid_dict[server_cid] != None):
++                if self._debug_tag:
++                    print("server %s recv a correct app packet, server thread id is %d"
++                          % (self._sid, self.threadID))
++                self.recv_correct_app_packet_num += 1
++                pkt = self.quic_construct_short_header_packet(self._payload, self._cid_dict[server_cid])
++                self.quic_sendto(pkt, peer_addr[0], peer_addr[1])
++            else:
++                self.recv_error_app_packet_num += 1
+diff --git a/test/quic_lb/conf/conf.json b/test/quic_lb/conf/conf.json
+new file mode 100644
+index 0000000..df6075c
+--- /dev/null
++++ b/test/quic_lb/conf/conf.json
+@@ -0,0 +1,22 @@
++[
++{
++	"conf_id": 0,
++	"route_mode": "plaintext",
++	"sid_len": 14,
++    "retry_service_ctx":{
++		"retry_method":"shared_state",
++	    "retry_mode":"inactive",
++	    "retry_token_key":"01234567890123456789012345678901"
++    }
++},
++{
++	"conf_id": 1,
++	"route_mode": "block_cipher",
++	"sid_len": 14,
++    "retry_service_ctx":{
++		"retry_method":"shared_state",
++	    "retry_mode":"inactive",
++	    "retry_token_key":"01234567890123456789012345678901"
++    }
++}
++]
+diff --git a/test/quic_lb/conf/conf_retry_on.json b/test/quic_lb/conf/conf_retry_on.json
+new file mode 100644
+index 0000000..c32cc00
+--- /dev/null
++++ b/test/quic_lb/conf/conf_retry_on.json
+@@ -0,0 +1,22 @@
++[
++  {
++    "conf_id": 0,
++    "route_mode": "plaintext",
++    "sid_len": 14,
++    "retry_service_ctx":{
++      "retry_method":"shared_state",
++      "retry_mode":"active",
++      "retry_token_key":"01234567890123456789012345678901"
++    }
++  },
++  {
++    "conf_id": 1,
++    "route_mode": "block_cipher",
++    "sid_len": 14,
++    "retry_service_ctx":{
++      "retry_method":"shared_state",
++      "retry_mode":"active",
++      "retry_token_key":"01234567890123456789012345678901"
++    }
++  }
++]
+diff --git a/test/quic_lb/conf/quic_lb.conf b/test/quic_lb/conf/quic_lb.conf
+new file mode 100644
+index 0000000..3b80cd0
+--- /dev/null
++++ b/test/quic_lb/conf/quic_lb.conf
+@@ -0,0 +1,37 @@
++#
++user  admin;
++worker_processes  1;
++#daemon off;
++#master_process off;
++error_log  logs/error.log debug;
++#error_log  logs/error.log  notice;
++#error_log  logs/error.log  error;
++#pid        logs/nginx.pid;
++
++events {
++	worker_connections  102400;
++}
++
++stream {
++    upstream quic_upstreams {
++        quic_lb_mode ;
++        server 127.0.0.1:8443 sid=127.0.0.1:8443;
++        server 127.0.0.1:8444 sid=127.0.0.1:8444;
++        server 127.0.0.1:8445 sid=127.0.0.1:8445;
++        server 127.0.0.1:8446 sid=127.0.0.1:8446;
++        server 127.0.0.1:8447 sid=127.0.0.1:8447;
++    }
++
++
++    server {
++        listen 8001 quic reuseport;
++        proxy_pass quic_upstreams;
++        quic_lb_conf_file quic_lb/conf/conf.json;
++        proxy_connect_timeout 1000s;
++        proxy_timeout 1000s;
++        proxy_requests 10000;
++        proxy_responses 10000;
++    }
++
++ }
++
+diff --git a/test/quic_lb/conf/quic_lb_proxy_protocol.conf b/test/quic_lb/conf/quic_lb_proxy_protocol.conf
+new file mode 100644
+index 0000000..6cbfd9c
+--- /dev/null
++++ b/test/quic_lb/conf/quic_lb_proxy_protocol.conf
+@@ -0,0 +1,38 @@
++#
++user  admin;
++worker_processes  1;
++#daemon off;
++#master_process off;
++error_log  logs/error.log debug;
++#error_log  logs/error.log  notice;
++#error_log  logs/error.log  error;
++#pid        logs/nginx.pid;
++
++events {
++	worker_connections  102400;
++}
++
++stream {
++    upstream quic_upstreams {
++        quic_lb_mode ;
++        server 127.0.0.1:8443 sid=127.0.0.1:8443;
++        server 127.0.0.1:8444 sid=127.0.0.1:8444;
++        server 127.0.0.1:8445 sid=127.0.0.1:8445;
++        server 127.0.0.1:8446 sid=127.0.0.1:8446;
++        server 127.0.0.1:8447 sid=127.0.0.1:8447;
++    }
++
++
++    server {
++        listen 8001 quic reuseport;
++        proxy_pass quic_upstreams;
++        quic_lb_conf_file quic_lb/conf/conf.json;
++        quic_lb_proxy_protocol on;
++        proxy_connect_timeout 1000s;
++        proxy_timeout 1000s;
++        proxy_requests 10000;
++        proxy_responses 10000;
++    }
++
++ }
++
+diff --git a/test/quic_lb/conf/quic_lb_retry_on.conf b/test/quic_lb/conf/quic_lb_retry_on.conf
+new file mode 100644
+index 0000000..1e38e57
+--- /dev/null
++++ b/test/quic_lb/conf/quic_lb_retry_on.conf
+@@ -0,0 +1,31 @@
++#
++user  admin;
++worker_processes  1;
++#daemon off;
++#master_process off;
++error_log  logs/error.log debug;
++#error_log  logs/error.log  notice;
++#error_log  logs/error.log  error;
++#pid        logs/nginx.pid;
++events {
++	worker_connections  102400;
++}
++stream {
++    upstream quic_upstreams {
++        quic_lb_mode ;
++        server 127.0.0.1:9443 sid=127.0.0.1:9443;
++        server 127.0.0.1:9444 sid=127.0.0.1:9444;
++        server 127.0.0.1:9445 sid=127.0.0.1:9445;
++        server 127.0.0.1:9446 sid=127.0.0.1:9446;
++        server 127.0.0.1:9447 sid=127.0.0.1:9447;
++    }
++    server {
++        listen 8001 quic reuseport;
++        proxy_pass quic_upstreams;
++        quic_lb_conf_file quic_lb/conf/conf_retry_on.json;
++        proxy_connect_timeout 1000s;
++        proxy_timeout 1000s;
++        proxy_requests 10000;
++        proxy_responses 10000;
++    }
++ }
+diff --git a/test/quic_lb/logs/.gitkeep b/test/quic_lb/logs/.gitkeep
+new file mode 100644
+index 0000000..e69de29
+diff --git a/test/quic_lb_test.c b/test/quic_lb_test.c
+new file mode 100644
+index 0000000..e577f23
+--- /dev/null
++++ b/test/quic_lb_test.c
+@@ -0,0 +1,223 @@
++/*
++ * Copyright 2020. All Rights Reserved.
++ * Author: Lingtao Kong
++ */
++
++
++#include <stdio.h>
++#include <string.h>
++#include <sys/time.h>
++#include <openssl/evp.h>
++
++
++#define  TEST_RETRY_TAG_LEN     16
++#define  u_char                 unsigned char
++#define  TEST_ERROR            -1
++#define  TEST_OK                0
++#define  TEST_MAX_TOKEN_SIZE    32
++#define  RETRY_LIFETIME         30000
++
++
++u_char key[16] =
++    "\xcc\xce\x18\x7e\xd0\x9a\x09\xd0\x57\x28\x15\x5a\x6c\xb9\x6b\xe1";
++u_char nonce[12] =
++    "\xe5\x49\x30\xf9\x7f\x21\x36\xf0\x53\x0a\x8c\x1c";
++u_char token_key[32] = "01234567890123456789012345678901";
++
++
++typedef struct {
++    size_t      len;
++    u_char     *data;
++} test_string_t;
++
++
++typedef struct {
++    test_string_t key;
++    test_string_t iv;
++} test_retry_secret_t;
++
++
++static test_string_t *test_get_retry_packet_tag(u_char *pseudo_data, size_t pseudo_len);
++static size_t test_encode_retry(const EVP_CIPHER  *cipher, test_retry_secret_t *s,
++    test_string_t *out, u_char *nonce, test_string_t *in, test_string_t *pseu_pkt);
++
++
++/*
++ * only support ipv4 address currently.
++ */
++size_t test_verify_token(unsigned int addr_value, u_char *token, size_t token_len) {
++    int                     len, tlen, iv_len;
++    u_char                 *iv, *p;
++    time_t                  sec;
++    unsigned int            msec, curremt_msec;
++    EVP_CIPHER_CTX         *ctx;
++    const EVP_CIPHER       *cipher;
++    u_char                  tdec[TEST_MAX_TOKEN_SIZE];
++
++    cipher = EVP_aes_256_cbc();
++    iv = token;
++    iv_len = EVP_CIPHER_iv_length(cipher);
++
++    /* sanity checks */
++    if (token_len < (size_t) iv_len + EVP_CIPHER_block_size(cipher)) {
++        return 0;
++    }
++    if (token_len > (size_t) iv_len + TEST_MAX_TOKEN_SIZE) {
++        return 0;
++    }
++
++    ctx = EVP_CIPHER_CTX_new();
++    if (ctx == NULL) {
++        return 0;
++    }
++    if (!EVP_DecryptInit_ex(ctx, cipher, NULL, token_key, iv)) {
++        EVP_CIPHER_CTX_free(ctx);
++        return 0;
++    }
++
++    p = token + iv_len;
++    len = token_len - iv_len;
++    if (EVP_DecryptUpdate(ctx, tdec, &len, p, len) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        return 0;
++    }
++    if (EVP_DecryptFinal_ex(ctx, tdec + len, &tlen) <= 0) {
++        EVP_CIPHER_CTX_free(ctx);
++        return 0;
++    }
++    EVP_CIPHER_CTX_free(ctx);
++
++
++    if (memcmp(tdec, (u_char*)(&addr_value), 4) != 0) {
++        return 0;
++    }
++
++    return 1;
++    /* don't check timestamp at this time */
++    memcpy(&msec, tdec + len, sizeof(msec));
++    struct timeval tv;
++    gettimeofday(&tv, NULL);
++    sec = tv.tv_sec;
++    msec = tv.tv_usec / 1000;
++    curremt_msec = (unsigned int) sec * 1000 + msec;
++    if (curremt_msec - msec > RETRY_LIFETIME) {
++        return 0;
++    }
++
++    return 1;
++}
++
++/*
++ * recompute tag with pseudo_data input, then compare
++ * the result with retry_tag input.
++ */
++size_t test_verify_retry_tag(u_char *pseudo_data,
++    size_t pseudo_len, u_char *retry_tag)
++{
++    test_string_t *retry_tag_ = test_get_retry_packet_tag(pseudo_data, pseudo_len);
++    if (retry_tag_ == NULL) {
++        printf("test_get_retry_packet_tag failed\n");
++        return 0;
++    }
++    if (0 != memcmp(retry_tag, retry_tag_->data, retry_tag_->len)) {
++        return 0;
++    }
++    return 1;
++}
++
++
++static test_string_t *
++test_get_retry_packet_tag(u_char *pseudo_data, size_t pseudo_len)
++{
++    static u_char retry_tag_data[TEST_RETRY_TAG_LEN];
++    static test_string_t  retry_tag;
++    retry_tag.data = retry_tag_data;
++    retry_tag.len =  TEST_RETRY_TAG_LEN;
++    test_string_t pesudo_packet;
++    pesudo_packet.data = pseudo_data;
++    pesudo_packet.len = pseudo_len;
++    test_retry_secret_t secret1;
++    secret1.key.data = key;
++    secret1.key.len = sizeof(key);
++    secret1.iv.len = sizeof(nonce);
++    test_string_t  in;
++    in.data = NULL;
++    in.len = 0;
++
++    const EVP_CIPHER *cipher = EVP_aes_128_gcm();
++    if (test_encode_retry(cipher,
++        &secret1, &retry_tag, nonce, &in, &pesudo_packet) != TEST_OK)
++    {
++        return NULL;
++    }
++
++    return &retry_tag;
++}
++
++
++static size_t
++test_encode_retry(const EVP_CIPHER  *cipher, test_retry_secret_t *s,
++    test_string_t *out, u_char *nonce, test_string_t *in,
++    test_string_t *pseu_pkt)
++{
++    int              len;
++    EVP_CIPHER_CTX  *ctx;
++    ctx = EVP_CIPHER_CTX_new();
++    if (ctx == NULL) {
++        printf("EVP_CIPHER_CTX_new() failed\n");
++        return TEST_ERROR;
++    }
++
++    if (EVP_EncryptInit_ex(ctx, cipher, NULL, NULL, NULL) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        printf("EVP_EncryptInit_ex() failed\n");
++        return TEST_ERROR;
++    }
++
++    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, s->iv.len, NULL)
++        == 0)
++    {
++        EVP_CIPHER_CTX_free(ctx);
++        printf("EVP_CIPHER_CTX_ctrl(EVP_CTRL_GCM_SET_IVLEN) failed\n");
++        return TEST_ERROR;
++    }
++
++    if (EVP_EncryptInit_ex(ctx, NULL, NULL, s->key.data, nonce) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        printf("EVP_EncryptInit_ex() failed\n");
++        return TEST_ERROR;
++    }
++
++    if (EVP_EncryptUpdate(ctx, NULL, &len, pseu_pkt->data, pseu_pkt->len) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        printf("EVP_EncryptUpdate() failed\n");
++        return TEST_ERROR;
++    }
++
++    if (EVP_EncryptUpdate(ctx, out->data, &len, in->data, in->len) != 1) {
++        EVP_CIPHER_CTX_free(ctx);
++        printf("EVP_EncryptUpdate()  failed\n");
++        return TEST_ERROR;
++    }
++
++    out->len = len;
++    if (EVP_EncryptFinal_ex(ctx, out->data + out->len, &len) <= 0) {
++        EVP_CIPHER_CTX_free(ctx);
++        printf("EVP_EncryptFinal_ex  failed\n");
++        return TEST_ERROR;
++    }
++
++    out->len += len;
++    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, EVP_GCM_TLS_TAG_LEN,
++                            out->data + in->len)
++        == 0)
++    {
++        EVP_CIPHER_CTX_free(ctx);
++        printf("EVP_CIPHER_CTX_ctrl(EVP_CTRL_GCM_GET_TAG) failed\n");
++        return TEST_ERROR;
++    }
++    EVP_CIPHER_CTX_free(ctx);
++    out->len += EVP_GCM_TLS_TAG_LEN;
++
++    return TEST_OK;
++}
+diff --git a/test/quic_lb_test.py b/test/quic_lb_test.py
+new file mode 100644
+index 0000000..8c151b9
+--- /dev/null
++++ b/test/quic_lb_test.py
+@@ -0,0 +1,609 @@
++import pytest
++import quic.quic_server as quic_server
++import quic.quic_client as quic_client
++import quic.quic_base as quic_base
++import socket
++import time
++import os
++import json
++
++debug_tag = False
++
++class conf:
++    conf_id = 0
++    isMajor = True
++    route_mode = "plaintext"
++    sid_len = 0
++    retry_method =  "shared_state",
++    retry_mode = "inactive",
++    retry_token_key = "01234567890123456789012345678901"
++
++    def __init__(self):
++        pass
++
++
++
++class TestCase():
++    # test server info
++    test_server_num = 5
++    server_arr = []
++    server_orig_src_addr = "127.0.0.1"
++    server_orig_src_port = 8443
++
++    # test server info with retry
++    test_server_num_ues_retry = 5
++    server_arr_retry = []
++    server_orig_src_port_use_retry = 9443
++
++    server_cid_len = 18
++    # test client info
++    client_src_addr = "127.0.0.1"
++    client_src_port = 6666
++    client_migrate_addr = "127.0.0.1"
++    client_migrate_port = 6667
++    client_cid_len = 18
++    client = None
++    # quic-lb info
++    quic_lb_ip = "127.0.0.1"
++    quic_lb_port = 8001
++
++    def load_conf_file(self, conf_file):
++        with open('conf_file','r') as f:
++            data = json.load(f)
++            return data
++
++    def setup_class(self):
++        os.system("echo '' > ./quic_lb/logs/error.log")
++        os.system("echo '' > ./quic_lb/logs/access.log")
++        pass
++
++    def teardown_class(self):
++        for server in self.server_arr:
++            server.terminate()
++
++        for server in self.server_arr_retry:
++            server.terminate()
++
++    def setup(self):
++        os.system("pkill nginx")
++        os.system("./quic_lb/nginx -p quic_lb -c conf/quic_lb.conf")
++        self.server_arr = []
++        self.server_arr_retry = []
++        self.client = None
++        for i in range(0, self.test_server_num):
++            port = self.server_orig_src_port + i
++            ip = self.server_orig_src_addr
++            server = quic_server.QuicServer(i, ip, port, ip+":"+str(port), 0, False)
++            server.start()
++            self.server_arr.append(server)
++
++        # server with retry service
++        for i in range(0, self.test_server_num_ues_retry):
++            port = self.server_orig_src_port_use_retry + i
++            ip = self.server_orig_src_addr
++            server = quic_server.QuicServer(i, ip, port, ip+":"+str(port), 0, True)
++            server.start()
++            self.server_arr_retry.append(server)
++
++
++    def teardown(self):
++        os.system("pkill nginx")
++        for server in self.server_arr:
++            server.terminate()
++
++        for server in self.server_arr_retry:
++            server.terminate()
++
++        self.server_arr = []
++        self.server_arr_retry = []
++        self.client.terminate()
++
++    def test_quic_client_send_init_packet_without_token(self):
++        server = self.server_arr[0]
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", server.src_addr, server.src_port)
++        token = []
++        test_payload = ""
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(pkt, server.src_addr, server.src_port)
++
++    def test_quic_client_send_init_packet_with_token(self):
++        server = self.server_arr[0]
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", server.src_addr, server.src_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "this is test payload"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(pkt, server.src_addr, server.src_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == server.src_addr
++        assert addr[1] == server.src_port
++        assert server.recv_correct_init_packet_num == 1
++        #assert self.client.quic_packet_is_long_packet(data) == True
++
++    def test_quic_client_send_init_packet_and_app_packet(self):
++        server = self.server_arr[0]
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", server.src_addr, server.src_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "this is test payload"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, server.src_addr, server.src_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == server.src_addr
++        assert addr[1] == server.src_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, server.src_addr, server.src_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == server.src_addr
++        assert addr[1] == server.src_port
++        assert server.recv_correct_app_packet_num == 1
++
++    def test_quic_connection_migrate(self):
++        server = self.server_arr[0]
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        self.client_migrate_addr, self.client_migrate_port,
++                                        server.src_addr, server.src_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "this is test payload"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, server.src_addr, server.src_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == server.src_addr
++        assert addr[1] == server.src_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, server.src_addr, server.src_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == server.src_addr
++        assert addr[1] == server.src_port
++        assert server.recv_correct_app_packet_num == 1
++        self.client.addr_migration()
++        self.client.quic_sendto(app_pkt, server.src_addr, server.src_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == server.src_addr
++        assert addr[1] == server.src_port
++        assert server.recv_correct_app_packet_num == 2
++
++    def test_quic_client_send_init_packet_and_app_packet_with_quic_lb(self):
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "this is test payload"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 3th server as dest server
++        # todo: chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        if debug_tag:
++            print("client new dcid is: %s " % init_packet.scid)
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++
++    def test_quic_client_send_small_init_packet_and_app_packet_with_quic_lb(self):
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "t"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 3th server as dest server
++        # todo: chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        if debug_tag:
++            print("client new dcid is: %s " % init_packet.scid)
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++
++    def test_quic_client_send_many_small_init_packet_and_app_packets_with_quic_lb(self):
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "t"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 3th server as dest server
++        # todo: chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        if debug_tag:
++            print("client new dcid is: %s " % init_packet.scid)
++        app_pkt_num = 100
++        expire_receive_pkt_num = 1
++        for i in range(0, app_pkt_num):
++            app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++            self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++            data, addr = self.client.recvfrom()
++            assert addr[0] == self.quic_lb_ip
++            assert addr[1] == self.quic_lb_port
++            assert server.recv_correct_app_packet_num == expire_receive_pkt_num
++            expire_receive_pkt_num = expire_receive_pkt_num + 1
++
++    def test_quic_client_send_big_init_packet_and_app_packet_with_quic_lb(self):
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload_len = 10000
++        test_payload = ""
++        for i in range(0, 10000):
++            test_payload += "t"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 3th server as dest server
++        # todo: chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        if debug_tag:
++            print("client new dcid is: %s " % init_packet.scid)
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++
++    def test_quic_client_send_many_big_init_packet_and_app_packet_with_quic_lb(self):
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload_len = 10000
++        test_payload = ""
++        for i in range(0, 10000):
++            test_payload += "t"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 3th server as dest server
++        # todo: chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        if debug_tag:
++            print("client new dcid is: %s " % init_packet.scid)
++        app_pkt_num = 100
++        expire_receive_pkt_num = 1
++        for i in range(0, app_pkt_num):
++            app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++            self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++            data, addr = self.client.recvfrom()
++            assert addr[0] == self.quic_lb_ip
++            assert addr[1] == self.quic_lb_port
++            assert server.recv_correct_app_packet_num == expire_receive_pkt_num
++            expire_receive_pkt_num = expire_receive_pkt_num + 1
++
++    def test_quic_connection_migrate_with_quic_lb(self):
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        self.client_migrate_addr, self.client_migrate_port,
++                                        self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "test"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 3th server as dest server
++        # todo: fix me, chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++        self.client.addr_migration()
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 2
++
++    def test_quic_connection_migrate_then_send_many_packets_with_quic_lb(self):
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        self.client_migrate_addr, self.client_migrate_port,
++                                        self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "test"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 2th server as dest server
++        # todo: fix me, chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++        self.client.addr_migration()
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 2
++        expire_receive_pkt_num = 3
++        app_pkt_num = 100
++        for i in range(0, app_pkt_num):
++            app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++            self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++            data, addr = self.client.recvfrom()
++            assert addr[0] == self.quic_lb_ip
++            assert addr[1] == self.quic_lb_port
++            assert server.recv_correct_app_packet_num == expire_receive_pkt_num
++            expire_receive_pkt_num = expire_receive_pkt_num + 1
++
++    def test_quic_new_connection_reuse_old_addr_with_quic_lb(self):
++        self.test_quic_client_send_init_packet_and_app_packet_with_quic_lb()
++        # now we set up a new client with the same src address but a new dcid
++        self.client.terminate()
++        client_new_addr = "127.0.0.1"
++        client_new_port = 16666
++        self.client = quic_client.QuicClient(client_new_addr, client_new_port,
++                                        "", "", self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "test"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # if sid route faild, quic lb use weight consistant hash algorithm, it will
++        # choose the 1th server as upstream.
++        # Todo: weight consistant hash algorithm implement
++        server = self.server_arr[0]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        if debug_tag:
++            print("client new dcid is: %s " % init_packet.scid)
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++
++    def test_quic_new_connection_reuse_old_migrate_addr_with_quic_lb(self):
++        self.test_quic_connection_migrate_with_quic_lb()
++        self.client.terminate()
++        client_new_addr = "127.0.0.1"
++        client_new_port = 16666
++        # now we use migrate_addr as src addr
++        self.client = quic_client.QuicClient(client_new_addr,
++            client_new_port, self.client_src_addr, self.client_src_port,
++            self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "test"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for weight consistent hash algorithm, quic lb would use 1th server
++        # as dest server
++        # todo: fix me, chash implement in test case
++        server = self.server_arr[0]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid,
++            test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++        self.client.addr_migration()
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 2
++
++    def test_quic_client_send_init_packet_and_app_packet_with_quic_lb_proxy_protocol(self):
++        os.system("pkill nginx")
++        os.system("./quic_lb/nginx -p quic_lb -c conf/quic_lb_proxy_protocol.conf")
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                        "", "", self.quic_lb_ip, self.quic_lb_port)
++        # token = self.client.gen_token()
++        token = self.client.token_mocked
++        test_payload = "this is test payload"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        # for consistent hash algorithm, we would use 3th server as dest server
++        # todo: chash implement in test case
++        server = self.server_arr[2]
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_init_packet_num == 1
++        assert self.client.quic_packet_is_long_packet(data) == True
++        # extract server cid
++        init_packet = quic_base.InitPacket(data)
++        assert init_packet.version == self.client._draft_version
++        if debug_tag:
++            print("client new dcid is: %s " % init_packet.scid)
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++        assert server.client_ip == self.client_src_addr
++        assert int(server.client_port) == self.client_src_port
++
++
++    def test_nginx_quic_lb_retry_service(self):
++        os.system("pkill nginx")
++        os.system("./quic_lb/nginx -p quic_lb -c conf/quic_lb_retry_on.conf")
++        self.client = quic_client.QuicClient(self.client_src_addr, self.client_src_port,
++                                             "", "", self.quic_lb_ip, self.quic_lb_port)
++        # 1. send initial packet without token
++        token = self.client.token_recved
++        test_payload = "this is test payload"
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        odcid[0] &= 0x3f # use config id 0
++        self.client.odcid = odcid
++        self.client.odcid_len = self.server_cid_len
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(token, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++
++        # 2. expect recv retry packet from quiclb , not server
++        data, addr = self.client.recvfrom()
++        assert self.client.quic_packet_is_retry_packet(data) == True
++        found = False
++        for i in range(0, self.test_server_num_ues_retry):
++            server = self.server_arr_retry[i]
++            if server.retry_recv_packet_with_token_num > 0:
++                found = True
++                break
++        assert found == False
++
++        # 3. get retry token from retry packet, and verify tag
++        retry_packet = quic_base.RetryPacket(data)
++        self.client.token_recved = retry_packet.retry_token_data
++        res = retry_packet.pkt_verify_retry_tag(self.client.odcid, self.client.odcid_len)
++        print("[client] verify retry tag result:", res)
++        assert res == True
++
++        # 4. send another packet with token
++        odcid = self.client.gen_random_bytes(self.server_cid_len)
++        scid = self.client.gen_random_bytes(self.client_cid_len)
++        init_pkt = self.client.quic_construct_init_packet(self.client.token_recved, test_payload, odcid, scid)
++        self.client.quic_sendto(init_pkt, self.quic_lb_ip, self.quic_lb_port)
++
++        # 5. recv initial packet again from quic server, with token validated succ
++        data, addr = self.client.recvfrom()
++        assert self.client.quic_packet_is_long_packet(data) == True
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        found = False
++        for i in range(0, self.test_server_num_ues_retry):
++            server = self.server_arr_retry[i]
++            if server.retry_recv_packet_with_valid_token_num > 0 and server.recv_correct_init_packet_num > 0:
++                found = True
++                break
++        assert found == True
++
++       # 6. send short packet to server
++        init_packet = quic_base.InitPacket(data)
++        app_pkt = self.client.quic_construct_short_header_packet(init_packet.scid, test_payload)
++        self.client.quic_sendto(app_pkt, self.quic_lb_ip, self.quic_lb_port)
++        data, addr = self.client.recvfrom()
++        assert addr[0] == self.quic_lb_ip
++        assert addr[1] == self.quic_lb_port
++        assert server.recv_correct_app_packet_num == 1
++
++# for some print, use this again
++if __name__ == "__main__":
++    pytest.main(["-s", "quic_lb_test.py"])
++    os._exit(1)
+
