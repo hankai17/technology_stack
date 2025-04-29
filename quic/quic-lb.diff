@@ -615,7 +615,7 @@ index 0000000..48a3d5b
 +
 +
 +ngx_int_t
-+ngx_quic_parse_initial_header(ngx_quic_header_t *pkt)                  // hankai 从long header中的init包中解析出token
++ngx_quic_parse_initial_header(ngx_quic_header_t *pkt)                  // hankai1.2 从long header中的init包中解析出token
 +{
 +    u_char    *p, *end;
 +    uint64_t   varint;
@@ -1224,7 +1224,7 @@ index 0000000..eed9242
 +
 +static ngx_int_t
 +ngx_stream_quic_lb_parse_header_from_buf(ngx_quic_header_t *pkt, ngx_buf_t *buf,
-+    ngx_connection_t *c, ngx_quic_lb_conf_t *conf_list)
++    ngx_connection_t *c, ngx_quic_lb_conf_t *conf_list)                    // hankai1
 +{
 +    ngx_int_t sid_len, conf_id;
 +
@@ -1236,7 +1236,7 @@ index 0000000..eed9242
 +    pkt->flags = buf->pos[0];
 +
 +    if (ngx_quic_long_pkt(pkt->flags)) {
-+        if (ngx_stream_quic_lb_parse_long_header(pkt) != NGX_OK) {         // long-header 解析出完整的dcid scid
++        if (ngx_stream_quic_lb_parse_long_header(pkt) != NGX_OK) {         // hankai1.1  long-header 解析出完整的dcid scid 记录到pkt里
 +            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
 +                          "QUIC-LB, recv invalid long header packet.");
 +            return NGX_ERROR;
@@ -1245,7 +1245,7 @@ index 0000000..eed9242
 +        if (ngx_quic_pkt_in(pkt->flags)) {
 +            pkt->initial_pkt = 1;
 +            /* get token*/
-+            if (ngx_quic_parse_initial_header(pkt) != NGX_OK) {            // 解析出token
++            if (ngx_quic_parse_initial_header(pkt) != NGX_OK) {            // hankai1.2 解析出token 到pkt里
 +                ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
 +                              "QUIC-LB, recv invalid initial packet.");
 +                return NGX_ERROR;
@@ -1253,7 +1253,7 @@ index 0000000..eed9242
 +        }
 +    } else if (ngx_quic_short_pkt(pkt->flags)) {
 +        /* we just read configuration rotate 2 bit to pkt->dcid.data for later process */
-+        if (ngx_stream_quic_lb_parse_short_header_conf_bit(pkt) != NGX_OK) {   // short-header 解析出dcid 只取首字节
++        if (ngx_stream_quic_lb_parse_short_header_conf_bit(pkt) != NGX_OK) {   // hankai1.1 short-header 解析出dcid 只取首字节
 +            return NGX_ERROR;
 +        }
 +    } else {
@@ -1261,7 +1261,7 @@ index 0000000..eed9242
 +    }
 +
 +    /* Todo: for some init packet, cid would be random, how to recognized them */
-+    conf_id = ngx_stream_quic_lb_parse_config_rotation_bit(pkt);           // 取dcid 首字节的高两位 [0, 3]
++    conf_id = ngx_stream_quic_lb_parse_config_rotation_bit(pkt);           // hankai1.3 取dcid首字节的高两位 找到对应的config (参考hankai0 配置面)
 +    if (conf_id < NGX_QUIC_LB_CONF_ID_MIN || conf_id > NGX_QUIC_LB_CONF_ID_MAX) {
 +        ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
 +            "QUIC-LB, recv packet config rotation bit have problems");
@@ -1269,14 +1269,14 @@ index 0000000..eed9242
 +    }
 +
 +    pkt->conf_id = conf_id;
-+    sid_len = conf_list[conf_id].sid_len;                                  // 配置的sid长度 // 4200行
++    sid_len = conf_list[conf_id].sid_len;                                  // 该dcid 所对应的配置的sid长度 // 4200行
 +    if (sid_len > NGX_QUIC_CID_LEN_MAX - 1 || sid_len < 0) {               // 配置20 字节竟然不行!!!
 +        ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
 +            "QUIC-LB, sid_len in current conf of short header packet has problem");
 +        return NGX_ERROR;
 +    }
 +
-+    if (sid_len == 0) {                                                    // 如果根据该包的dcid首字节前两位取的配置中 没有设置sid_len 那么与dcid长度保持一致
++    if (sid_len == 0) {                                                    // 该dcid 所对应的配置的sid长度为0  那么与dcid长度保持一致
 +        if (ngx_quic_short_pkt(pkt->flags)) {
 +            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
 +                "QUIC-LB, short packet mismatch config file, drop it");
@@ -1304,7 +1304,7 @@ index 0000000..eed9242
 +
 +    /* record dest sid, sid was composed by first byte and sid */
 +    pkt->sid.len = sid_len;
-+    pkt->sid.data = &pkt->dcid.data[1];                                    // eg: long-header   长度为配置中所配 sid为 dcid[1~] 即去掉首字节
++    pkt->sid.data = &pkt->dcid.data[1];                                    // hankai1.4 构造pkt->sid // eg: long-header: 长度为配置中所配 sid为 dcid[1~] 即去掉首字节
 +
 +    /*
 +     * pkt parse will change the buf->pos, actually we only need parse result,
@@ -1316,7 +1316,7 @@ index 0000000..eed9242
 +
 +
 +static ngx_int_t
-+ngx_stream_quic_lb_parse_short_header_conf_bit(ngx_quic_header_t *pkt)                 // 解析出dcid 只取首字节
++ngx_stream_quic_lb_parse_short_header_conf_bit(ngx_quic_header_t *pkt)                 // hankai1.1' 解析出dcid 只取首字节
 +{
 +    return ngx_stream_quic_lb_parse_short_header_with_fix_dcid_len(pkt, 1);            // 解析出dcid 只取首字节
 +}
@@ -1513,7 +1513,7 @@ index 0000000..eed9242
 +
 +
 +static char *
-+ngx_stream_quic_lb_proxy_read_conf_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
++ngx_stream_quic_lb_proxy_read_conf_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)        // hankai0 配置面
 +{
 +    ngx_stream_quic_lb_srv_conf_t     *qlscf = conf;
 +    ngx_str_t                         *value;
@@ -1523,7 +1523,7 @@ index 0000000..eed9242
 +        return "only one quic lb conf file needed";
 +    }
 +
-+    if (ngx_stream_quic_lb_parse_json_conf_file(cf, &(value[1]),
++    if (ngx_stream_quic_lb_parse_json_conf_file(cf, &(value[1]),                               // hankai0 配置面
 +        qlscf->quic_lb_conf) != NGX_OK)
 +    {
 +        return "quic lb conf file have problem";
@@ -1534,7 +1534,7 @@ index 0000000..eed9242
 +
 +
 +static ngx_int_t
-+ngx_stream_quic_lb_parse_json_conf_file(ngx_conf_t *cf, ngx_str_t *name,
++ngx_stream_quic_lb_parse_json_conf_file(ngx_conf_t *cf, ngx_str_t *name,                       // hankai0 配置面
 +    ngx_quic_lb_conf_t *quic_lb_conf)
 +{
 +    ngx_file_t                  file;
@@ -1601,7 +1601,7 @@ index 0000000..eed9242
 +        goto failed;
 +    }
 +
-+    if (ngx_stream_quic_lb_parse_json(cf, quic_lb_conf, buf,                       // 从json文件中解析得 quic_lb_conf
++    if (ngx_stream_quic_lb_parse_json(cf, quic_lb_conf, buf,                                   // hankai0.1 配置面 从json文件中解析得 quic_lb_conf
 +        size, name) == NGX_ERROR)
 +    {
 +        goto failed;
@@ -1620,8 +1620,8 @@ index 0000000..eed9242
 +
 +
 +static ngx_int_t
-+ngx_stream_quic_lb_parse_json(ngx_conf_t *cf, ngx_quic_lb_conf_t *quic_lb_conf,    // hankai 4200行
-+    u_char *buf, size_t size, ngx_str_t *name)
++ngx_stream_quic_lb_parse_json(ngx_conf_t *cf, ngx_quic_lb_conf_t *quic_lb_conf,                // hankai0.1 配置面 从json文件中解析得 quic_lb_conf // 4200行
++    u_char *buf, size_t size, ngx_str_t *name)                                                 //           用户配置 config_id 及其相关策略
 +{
 +    cJSON                       *root;
 +    ngx_int_t                    conf_num, i;
@@ -1872,7 +1872,7 @@ index 0000000..eed9242
 +            return NGX_ERROR;
 +        }
 +
-+        if (ngx_stream_quic_lb_parse_header_from_buf(s->pkt,                       // 从header头中 找到相应配置 重构一个新的pkt->sid.data|len
++        if (ngx_stream_quic_lb_parse_header_from_buf(s->pkt,                       // hankai1 // 从header头中 找到相应配置 重构一个新的pkt->sid.data|len
 +                c->buffer, c, qlscf->quic_lb_conf) != NGX_OK)
 +        {
 +            ngx_log_error(NGX_LOG_ERR, c->pool->log, 0,
@@ -1880,11 +1880,11 @@ index 0000000..eed9242
 +            return NGX_ERROR;
 +        }
 +
-+        s->quic_lb_conf = &qlscf->quic_lb_conf[s->pkt->conf_id];                   // 4200
++        s->quic_lb_conf = &qlscf->quic_lb_conf[s->pkt->conf_id];                   // 获取该包(dcid)相应的用户层配置 // 4200
 +
 +        /* for initial pkt, do retry service, draft 04, chapter 6. */
 +        if (s->quic_lb_conf->valid && s->pkt->initial_pkt) {
-+            ngx_int_t res = ngx_stream_quic_lb_do_retry_service(qlscf, s->pkt, c); // 收到init包 则给客户端反一个retry包
++            ngx_int_t res = ngx_stream_quic_lb_do_retry_service(qlscf, s->pkt, c); // hankai2 // 收到init包 则给客户端反一个retry包
 +            if (res == NGX_OK) {
 +                ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
 +                              "QUIC-LB, retry service, pass source "
@@ -1914,7 +1914,7 @@ index 0000000..eed9242
 +        return NGX_ERROR;
 +    }
 +
-+    *h = ngx_stream_quic_lb_handler;
++    *h = ngx_stream_quic_lb_handler;                                               // hankai0 注册lb_handler
 +
 +    return NGX_OK;
 +}
@@ -2061,19 +2061,19 @@ index 0000000..f2769b7
 +    ngx_str_t *token, u_char *key, ngx_str_t *cids);
 +
 +static size_t
-+ngx_stream_quic_lb_create_retry_itag(ngx_quic_header_t *pkt, u_char *out,          // retry包格式有点儿老了
++ngx_stream_quic_lb_create_retry_itag(ngx_quic_header_t *pkt, u_char *out,          // hankai2.3.4.1 构造retry包 // retry包格式有点儿老了?
 +    u_char **start)
 +{
 +    u_char  *p;
 +    p = out;
 +    *p++ = pkt->odcid.len;
-+    p = ngx_cpymem(p, pkt->odcid.data, pkt->odcid.len);
++    p = ngx_cpymem(p, pkt->odcid.data, pkt->odcid.len);                            // old dcid !
 +
 +    *start = p;
 +
-+    *p++ = 0xff;
++    *p++ = 0xff;                                                                   // 头部1个字节
 +
-+    p = ngx_quic_write_uint32(p, NGX_QUIC_VERSION);
++    p = ngx_quic_write_uint32(p, NGX_QUIC_VERSION);                                // Version
 +
 +    *p++ = pkt->dcid.len;
 +    p = ngx_cpymem(p, pkt->dcid.data, pkt->dcid.len);
@@ -2118,7 +2118,7 @@ index 0000000..f2769b7
 +
 +
 +static ngx_int_t
-+ngx_stream_quic_lb_gen_and_send_retry_packet(ngx_connection_t *c,
++ngx_stream_quic_lb_gen_and_send_retry_packet(ngx_connection_t *c,                  // hankai2.3 发送retry包 等待客户端第二次到来
 +    ngx_quic_lb_conf_t *qconf, ngx_str_t *cids)
 +{
 +    ssize_t            len;
@@ -2129,7 +2129,7 @@ index 0000000..f2769b7
 +    ngx_memzero(buf, NGX_QUIC_RETRY_BUFFER_SIZE);
 +
 +    /* currently, use nginx quic model token format */
-+    if (ngx_stream_quic_lb_new_ngx_quic_model_token(                               // 加密client_ip timeout_ms 生产token字段
++    if (ngx_stream_quic_lb_new_ngx_quic_model_token(                               // hankai2.3.1 加密client_ip timeout_ms 生产token字段
 +        c, &token, qconf->retry_service.retry_token_key)
 +        != NGX_OK)
 +    {
@@ -2146,21 +2146,21 @@ index 0000000..f2769b7
 +#endif
 +
 +    ngx_memzero(&pkt, sizeof(ngx_quic_header_t));
-+    pkt.flags = NGX_QUIC_PKT_FIXED_BIT | NGX_QUIC_PKT_LONG | NGX_QUIC_PKT_RETRY;   // 构造long-header retry包 准备返给客户端
++    pkt.flags = NGX_QUIC_PKT_FIXED_BIT | NGX_QUIC_PKT_LONG | NGX_QUIC_PKT_RETRY;   // hankai2.3.2 构造long-header retry包 准备返给客户端
 +    pkt.log = c->log;
 +
 +    /* origin dcid */
-+    pkt.odcid = cids[0];
++    pkt.odcid = cids[0];                                                           // 这个临时cids为 [dcid(原生的), scid(原生的), rand]
 +    /* scid */
-+    pkt.dcid = cids[1];                                                            // 构造long-header cid字段
++    pkt.dcid = cids[1];                                                            // hankai2.3.3 构造long-header cid字段
 +    /* new dcid */
-+    pkt.scid = cids[2];
++    pkt.scid = cids[2];                                                            // 这个retry包的 scid替换为 rand产生的id
 +
 +    pkt.token = token;
 +
 +    res.data = buf;
 +
-+    if (ngx_stream_quic_lb_create_retry_packet(&pkt, &res) != NGX_OK) {            // 构造 long-header retry包 (里面有 新的dcid 以及 加密的token)
++    if (ngx_stream_quic_lb_create_retry_packet(&pkt, &res) != NGX_OK) {            // hankai2.3.4 构造 long-header retry包 (里面有 新的dcid 以及 加密的token)
 +        return NGX_ERROR;
 +    }
 +
@@ -2168,7 +2168,7 @@ index 0000000..f2769b7
 +    ngx_quic_hexdump(c->log, "quic packet to send", res.data, res.len);
 +#endif
 +
-+    len = c->send(c, res.data, res.len);
++    len = c->send(c, res.data, res.len);                                           // hankai2.3.5 外发给客户端
 +    if (len == NGX_ERROR || (size_t) len != res.len) {
 +        return NGX_ERROR;
 +    }
@@ -2398,7 +2398,7 @@ index 0000000..f2769b7
 + * Encryption: AES-256-ECB
 + */
 +static ngx_int_t
-+ngx_stream_quic_lb_new_ngx_quic_model_token(ngx_connection_t *c, ngx_str_t *token, u_char *key)    // 生产token
++ngx_stream_quic_lb_new_ngx_quic_model_token(ngx_connection_t *c, ngx_str_t *token, u_char *key)    // hankai2.3.1 用retry_token_key 加密client_ip timeout_ms 生产token字段
 +{
 +    int                   len, iv_len;
 +    u_char               *data, *p, *iv;
@@ -2492,7 +2492,7 @@ index 0000000..f2769b7
 +
 +
 +static ngx_int_t
-+ngx_stream_quic_lb_create_retry_packet(ngx_quic_header_t *pkt, ngx_str_t *res)
++ngx_stream_quic_lb_create_retry_packet(ngx_quic_header_t *pkt, ngx_str_t *res)     // hankai2.3.4 构造 long-header retry包 (里面有 新的dcid 以及 加密的token)
 +{
 +    u_char              *start;
 +    ngx_str_t            ad, itag;
@@ -2515,7 +2515,7 @@ index 0000000..f2769b7
 +    static ngx_str_t  in = ngx_string("");
 +
 +    ad.data = res->data;
-+    ad.len = ngx_stream_quic_lb_create_retry_itag(pkt, ad.data, &start);           // 构造retry包 裸数据
++    ad.len = ngx_stream_quic_lb_create_retry_itag(pkt, ad.data, &start);           // hankai2.3.4.1 构造retry包
 +
 +    itag.data = ad.data + ad.len;
 +    itag.len = EVP_GCM_TLS_TAG_LEN;
@@ -2532,7 +2532,7 @@ index 0000000..f2769b7
 +    secret.key.data = key;
 +    secret.iv.len = sizeof(nonce);
 +
-+    if (ngx_stream_quic_lb_tls_seal(ciphers.c, &secret, &itag, nonce, &in, &ad, pkt->log)  // 加密裸数据
++    if (ngx_stream_quic_lb_tls_seal(ciphers.c, &secret, &itag, nonce, &in, &ad, pkt->log)  // 加密(裸数据 + odcid)
 +        != NGX_OK)
 +    {
 +        return NGX_ERROR;
@@ -2664,11 +2664,11 @@ index 0000000..f2769b7
 +{
 +    uint8_t                 len;
 +
-+    if (RAND_bytes(&len, sizeof(len)) != 1) {
++    if (RAND_bytes(&len, sizeof(len)) != 1) {                                              // 生成一个随机字节，用于确定新 CID 的长度
 +        return NGX_ERROR;
 +    }
 +
-+    len = len % 10 + 10;
++    len = len % 10 + 10;                                                                   // 将长度限制在 10 到 19 之间
 +
 +    new_dcid->len = len;
 +    new_dcid->data = ngx_pnalloc(c->pool, len);
@@ -2676,7 +2676,7 @@ index 0000000..f2769b7
 +        return NGX_ERROR;
 +    }
 +
-+    if (RAND_bytes(new_dcid->data, len) != 1) {
++    if (RAND_bytes(new_dcid->data, len) != 1) {                                            // 生成随机数据并填充新 CID
 +        return NGX_ERROR;
 +    }
 +
@@ -2685,7 +2685,7 @@ index 0000000..f2769b7
 +
 +
 +ngx_int_t
-+ngx_stream_quic_lb_do_retry_service(void *cf, ngx_quic_header_t *pkt,
++ngx_stream_quic_lb_do_retry_service(void *cf, ngx_quic_header_t *pkt,                      // hankai2
 +    ngx_connection_t *c)
 +{
 +
@@ -2699,16 +2699,16 @@ index 0000000..f2769b7
 +    /* scid */
 +    cids[1] = pkt->scid;
 +
-+    if (ngx_stream_quic_lb_gen_new_cid(&cids[2], c) != NGX_OK) {                           // 此时这个临时cids为 [dcid(原生的) + scid(原生的) + rand]
++    if (ngx_stream_quic_lb_gen_new_cid(&cids[2], c) != NGX_OK) {                           // hankai2.1 构造cids[3]  // 此时(调用该函数后)这个临时cids为 [dcid(原生的), scid(原生的), rand]
 +        return NGX_ERROR;
 +    }
 +
 +    ngx_int_t rc;
 +    if (qconf->retry_service.retry_method == NGX_QUIC_LB_RETRY_SHARED_STATE) {             // 4200
-+        rc = ngx_stream_quic_lb_process_retry_service_in_shared_state(qconf, c, pkt);      // 解密客户端init包中的token
-+        if (rc != NGX_OK) {                                                                // 校验失败 可能真的是握手首包
++        rc = ngx_stream_quic_lb_process_retry_service_in_shared_state(qconf, c, pkt);      // hankai2.2 解密客户端init包中的token
++        if (rc != NGX_OK) {                                                                // hankai2.3 校验失败 可能真的是握手首包
 +            /* generate retry packet and send */
-+            ngx_int_t rc_ = ngx_stream_quic_lb_gen_and_send_retry_packet(c, qconf, cids);  // 发送retry包 等待客户端第二次到来
++            ngx_int_t rc_ = ngx_stream_quic_lb_gen_and_send_retry_packet(c, qconf, cids);  // hankai2.3 构造外发客户端retry(新scid + token)包 等待客户端第二次到来
 +            ngx_log_error(NGX_LOG_DEBUG, c->pool->log, 0,
 +                          "QUIC-LB, do retry service failed, "
 +                              "generate and send new retry packet:%s",

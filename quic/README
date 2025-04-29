@@ -207,6 +207,9 @@ typedef enum xqc_encrypt_level_s {
             当链接迁移时 服务端给客户端发送path_chang后 客户端会使用上面的 加密dcid跟 服务端通信
             过4lb时 找不到对应的session 那么可以解密这个加密的dcid 然后转发
 
+    dcid路由到worker其他方案
+        reuseport_select_sock(确保内核>4.1) 中注册run_bpf 不使用默认的4元组计算 而用上层的dcid计算得到sk
+
 4.0 0-RTT
     0-RTT一般是新建链接时 产生新的id(packet级别) 导致会hash到错误的rs(这个新建链接之前的那个父链接所hash的rs)
     客户端第一次发送的0-RTT包与第一个Initial包需要填写相同的DCID和SCID值
