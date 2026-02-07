@@ -20,9 +20,13 @@ def data_iter(batch_size, features, labels):
         yield features[batch_indices], labels[batch_indices]
 
 def linreg(X, w, b):  #@save
+    print("X.shape: ", X.shape)
+    print("w.shape: ", w.shape)
+    print("b.shape: ", b.shape)
     return torch.matmul(X, w) + b                       # 线性回归模型
 
 def squared_loss(y_hat, y):  #@save
+    #print("y_hat.shape: ", y_hat.shape)
     return (y_hat - y.reshape(y_hat.shape)) ** 2 / 2    # 均方损失函数
 
 def sgd(params, lr, batch_size):  #@save

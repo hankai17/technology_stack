@@ -66,6 +66,10 @@ def softmax(X):
     return X_exp / partition    # 这里应用了广播机制
 
 def net(X):
+    #print("X.shape: ", X.shape)
+    #print("W.shape: ", W.shape)
+    #print("X.reshape: ", X.reshape(-1, W.shape[0]).shape)
+    #print("b.shape: ", b.shape)
     return softmax(
         torch.matmul(
             X.reshape(          # 如果 X.shape = (64, 1, 28, 28)，总元素数 = 64×1×28×28 = 50176
@@ -105,6 +109,10 @@ def train_epoch_ch3(net, train_iter, loss, updater):  #@save
     metric = Accumulator(3)                             # 训练损失总和、训练准确度总和、样本数
     for X, y in train_iter:
         y_hat = net(X)                                  # 计算梯度并更新参数
+        #print("y_hat.shape: ", y_hat.shape)            # 256 * 10
+        #print("y_hat: ", y_hat)
+        #print("y.shape: ", y.shape)                    # 256
+        #print("y: ", y)
         l = loss(y_hat, y)
         if isinstance(updater, torch.optim.Optimizer):  # 使用PyTorch内置的优化器和损失函数
             updater.zero_grad()
@@ -143,6 +151,7 @@ train_iter, test_iter = d2l.load_data_fashion_mnist(batch_size)
 num_inputs = 784    # 28 * 28的图片 可以想象成一个含有784个元素的一维数组
 num_outputs = 10 	# 在softmax回归中，我们的输出与类别一样多。 因为我们的数据集有10个类别，所以网络输出维度为10
 					# 784 * 10的一个矩阵
+                    # 即 一张图必须输出10个数据 # 即784个w的系数 针对784个x输入 需要输出10个数字
 W = torch.normal(0, 0.01, size=(num_inputs, num_outputs), requires_grad=True)
 b = torch.zeros(num_outputs, requires_grad=True)
 
