@@ -1,0 +1,11 @@
+2440CPU 400MHZ      FClk
+SDRAM   100~133MHZ  HClk
+网卡    100~133MHZ  HClk
+UART    50MHZ       PClk
+定时器  50MHZ       PClk
+
+
+12MHZ --PLL寄存器倍频--> 400MHZ --分频寄存器--> 100/50MHZ
+
+PLL:
+    锁定时间
