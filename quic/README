@@ -244,7 +244,10 @@ typedef enum xqc_encrypt_level_s {
 
 
 
-
+base1.0
+    Long Header包用于版本协商和1-RTT密钥建立之前即用于握手。使用Long Header的包有： Initial包 Retry包 Handshake包 0-RTT保护包
+    在握手阶段，stream创造的流id号都为1，当stream id大于3的时候才是真正的数据交互阶段。此阶段下，client和server之间的报文交互使用的是"明文传输"，在握手完成之后使用短报文交互的时期使用的就是加密传输了
+    1-RTT密钥建立后，使用Short Header包进行通信
 
 
 
