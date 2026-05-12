@@ -1,0 +1,7 @@
+#arp -s 192.168.0.120 00-0c-29-85-2e-88
+#arp -d 192.168.0.120 
+
+# 奇怪的现象: 这个ip(0.108)必须是 未启动dpdk之前 且由0.1分配的ip 不能随意填写
+netsh i i show in
+netsh -c i i add neighbors 23 192.168.0.108  00-0C-29-14-16-FE
+netsh  i i delete neighbors 22

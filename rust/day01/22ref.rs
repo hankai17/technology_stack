@@ -1,37 +1,57 @@
+// cannot borrow `node.job` as mutable, as it is behind a `&` reference
+// cannot borrow `**row` as mutable, as it is behind a `&` reference
+// 不能借用 &  可以改为借用&mut
 
-fn test() {
-    {
-        /*
-        let i: i32 = 10;
-        let i_ptr: *const i32 = &i;
-
-        let mi_ptr = i_ptr as *const i32 as *mut i32; 
-        unsafe { *mi_ptr = 44; }
-        assert_eq!(i, 44);
-        */
-    }
-    {
-        let mut i: i32 = 88;
-        let i_ptr: *mut i32 = &mut i;
-        //*i_ptr = 11;
-        unsafe { *i_ptr = 11; }
-        assert_eq!(i, 11);
-    }
+struct Row {
+	string: String,
 }
 
-fn test_ref(i: &i32) {
-    let ptr = i as * const i32 as * mut i32;
-    println!("i: {}", i);
-    println!("ptr: {:?}", unsafe {*ptr});
+impl Row {
+	fn insert(&mut self, at: u16, c: char) {
+		let at = at as usize;
+		if at >= self.string.len() {
+			self.string.push(c);
+		} else {
+			self.string.insert(at, c)
+		}
+	}
+}
+
+struct File {
+	rows: Vec<Row>,
+	filename: Option<String>
+}
+
+impl File {
+	fn row(&self, index: usize) -> &Row {
+	    &self.rows[index]
+	}
+
+	fn row_mut(&mut self, index: usize) -> &mut Row {
+	    &mut self.rows[index]
+	}
+	/*
+	fn row(&self, index: usize) -> Option<&Row> {
+        self.rows.get(index)
+    }
+    fn row_mut(&mut self, index: usize) -> Option<&mut Row> {
+        self.rows.get_mut(index)
+    }
+    */
+}
+
+struct EditorState {
+	file: File,
+}
+
+fn update_row(mut state: &mut EditorState)  {
+	//let row = &state.file.row(0);         // failed
+	//let row = &state.file.row_mut(0);     // failed
+	let row = &mut state.file.row_mut(0);   // ok
+	row.insert(0, 'a');
 }
 
 fn main() {
-    test();
 
-    let i: i32 = 1111;
-    test_ref(&i);
-    println!("i: {}", i);
-
-    return;
 }
 
