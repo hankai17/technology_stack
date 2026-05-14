@@ -265,7 +265,7 @@ void display_stats(int stats_map_fd)
         return;
     }
 
-    if (bpf_map_lookup_elem(stats_map_fd, &key, per_cpu_stats) == -1)
+    if (bpf_map_lookup_elem(stats_map_fd, &key, per_cpu_stats) == -1)   // POD 深拷贝
     {
         fprintf(stderr, "Failed to read stats from map.\n");
         free(per_cpu_stats);
