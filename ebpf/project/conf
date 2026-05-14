@@ -1,0 +1,41 @@
+# 配置文件示例
+
+interface = "ens33";
+update_interval = 10;
+no_stats = false;
+stdout_interval = 1;
+
+filters = (
+    {
+        enabled = true;
+        action = 0; # 0=DROP, 1=ALLOW
+        src_ip = "192.168.32.1";
+        dst_ip = "0.0.0.0/0";
+        protocol = "TCP";
+        src_port = 0;
+        dst_port = 80;
+        min_ttl = 0;
+        max_ttl = 255;
+        min_len = 0;
+        max_len = 0;
+        pps = 1;
+        bps = 1;
+        block_time = 10;
+    },
+    {
+        enabled = true;
+        action = 0; # 0=DROP, 1=ALLOW
+        src_ip = "192.168.32.1";
+        dst_ip = "0.0.0.0/0";
+        protocol = "ICMP";
+        src_port = 0;
+        dst_port = 80;
+        min_ttl = 0;
+        max_ttl = 255;
+        min_len = 0;
+        max_len = 0;
+        pps = 1;
+        bps = 1;
+        block_time = 10;
+    }
+);
