@@ -87,15 +87,16 @@ fn test_dref() {                    // 解引用
 
     let mut i: i32 = 88;
     let i_ptr: *mut i32 = &mut i;   // 等价于&mut i as *mut i32;
-                                    //  把安全的可变引用，手动变成不受安全检查的原始指针(可变原始指针(裸指针)) 使用时必须用unsafe
+                                    //  把安全的可变引用 手动变成不受安全检查的原始指针(可变原始指针(裸指针)) 使用时必须用unsafe
     unsafe { *i_ptr = 11; }
     assert_eq!(i, 11);
 
     let i: i32 = 10;
-    let i_ptr: *const i32 = &i;     // 这一步没有问题
-    let mi_ptr = i_ptr as *const i32 as *mut i32;   // 强行把只读指针 -> 转成可写指针 // 用于欺骗编译器
-    unsafe { *mi_ptr = 44; }        // mmu映射的内存页为只读 这里即使加上unsafe 程序也是崩溃
-    assert_eq!(i, 44);
+    let i_ptr: *const i32 = &i;     // Rust内存/编译模型假定 在&i32存在期间 这块内存不会被任何方式修改(除了通过 UnsafeCell的合法内部可变性)
+    let mi_ptr = i_ptr as *const i32 as *mut i32;   // 强行把只读指针 -> 转成可写指针 // 用于欺骗编译器 即绕过BC(Borrow Checker)
+                                                    // BC只对Rust的安全引用&T &mut T有效 对裸指针*const T *mut T完全不进行追踪
+    unsafe { *mi_ptr = 44; }        // BC不介入 unsafe块 // raw pointer + unsafe 绕过了BC 
+    assert_eq!(i, 44);              // 基于上面的假定 rust编译器(-O2)有权利认为 这里就是10
 }
 
 fn test_dref1() {
