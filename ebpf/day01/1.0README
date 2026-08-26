@@ -1,0 +1,186 @@
+函数入口被替换为 int 3中断 继而在中断中执行用户写的kprobe函数等
+kprobe:
+    cat /sys/kernel/tracing/available_filter_functions
+    cat /sys/kernel/debug/tracing/available_filter_functions
+    cat /sys/kernel/debug/kprobes/list   看用户已注册生效的 kprobe
+tracepoint: ll /sys/kernel/debug/tracing/events/  内核暴露的一些跟踪点 性能最好
+内核6.1
+katran falco
+内核需要开启bpf jit 才能使得写的ebpf程序jit化
+cat /sys/kernel/debug/tracing/trace_pipe 获取bpf_printk打印信息
+辅助函数: 就是内核专门给ebpf提供的函数 规定ebpf只能调用这些函数 include/uapi/linux/bpf.h
+
+ebpf程序分三类
+    跟踪类: kprobe tp perf_event
+    网络: 
+        XDP(只能用于接收) (XDP 则只能操作裸数据 xdp_buff)
+        TC(可在网卡的接收和发送两个方向上执行)(可以直接获取内核解析后的网络报文数据结构sk_buff)
+    安全控制即BTF
+
+XDP
+    程序直接嵌入在网卡驱动的接收路径中（driver hook）
+    网卡收到包后，驱动会直接调用 XDP 程序（不是通过 kprobe 或 tracepoint）
+    是静态编译进驱动的 hook，不是动态探测 
+    XDP     20~45 Mpps  可达    50~60+ Mpps
+    DPDK    45~80 Mpps          100~140+ Mpps
+    需要网卡驱动显式支持 XDP 驱动不支持时，内核会在更靠后的位置（net/core/dev.c）提供一个通用 hook，性能会差一些，但仍然能跑。
+    ip link show eth0 | grep xdp 或查看驱动是否在内核 XDP 支持列表中
+
+    XDP 之后 才可能分配 skb
+    常规路径 → 驱动 NAPI poll 中（收到包后、进入协议栈前）分配skb
+
+
+MAPS
+maps是BPF数据的存储方式，是更高级对象类型的基础，包括table表、hashes哈希和histograms直方图
+
+
+Clang
+    跟GCC对标
+    基于LLVM的 C/C++ 编译器前端
+    Clang 把C代码 → 解析 → 转成LLVM中间表示（IR） 
+    LLVM优化IR 并生成eBPF字节码即.o
+
+LLVM
+    Low Level Virtual Machine: 由 LLVM IR + 优化器 + 后端指令生成器 + 配套工具 组成
+    LLVM IR：中间语言（编译的通用中间层，相当于编译界的「通用汇编」）
+    优化器：做常量折叠、死码消除、循环优化、内联等
+    后端指令生成器：把优化后的 IR 翻译成 x86/ARM/RISC-V/eBPF 等架构机器码
+    配套工具：llc、opt、llvm-strip、llvm-readelf 等
+
+    llvm 把 gcc的 词法 语法分析 编译 汇编 链接 显式的拆开了
+        IR: 平台无关的通用虚拟汇编
+        LLVM IR 介于「高级语言 AST」和「硬件汇编」之间  
+        前端: （Clang）：只干 词法分析 + 语法分析 → 生成 AST → 转 LLVM IR
+        中间层（LLVM Core）：IR 优化器（独立模块，可单独调用）
+        后端（LLVM Target）：IR → 汇编 → 机器码（每个架构一个独立后端）
+        链接：lld 单独作为独立链接器
+
+    GCC：独立完整编译器（前端 + 优化 + 后端 绑死一起）
+    Clang：LLVM 生态里的 C/C++ 语法前端 负责：解析 C 代码 → 生成 LLVM IR
+    LLVM：承接 Clang 的 IR → 优化 → 生成 eBPF/x86 机器码
+    流程:
+        C 源码 → Clang (前端) → LLVM IR → LLVM (优化 + 后端) → 目标机器码 (eBPF/x86)
+
+    Lua 的中间码叫字节码，LLVM 的叫 IR, IR最终生成机器的字节码
+    LuaJIT IR:
+        Lua 专属追踪式 JIT 中间表示
+        LuaJIT 内部热点路径追踪编译器的专用 IR，服务于 Lua 脚本的动态 JIT 编译
+        只处理 Lua 字节码的热点循环 / 函数（hot trace），不处理全程序，解释 + JIT 混合执行
+    LLVM IR:
+        连接任意高级语言（C/C++/Rust/Swift）和任意硬件（x86/ARM/eBPF）的通用桥梁
+        AOT 编译（提前编译）、JIT 编译、链接时优化（LTO）、跨平台代码生成
+
+
+
+
+1.BPF_TABLE
+语法：BPF_TABLE(_table_type, _key_type, _leaf_type, _name, _max_entries)
+
+创建一个映射名字为_name。大多数时候会被高层宏使用，例如BPF_HASH,BPF_HIST等。
+
+还有map.lookup(), map.lookup_or_init(), map.delete(), map.update(), map.insert(), map.increment().
+
+2.BPF_HASH
+语法BPF_HASH(name [, key_type [, leaf_type [, size]]])
+
+创建一个name哈希表，中括号中是可选参数。
+
+默认：BPF_HASH(name, key_type=u64, leaf_type=u64, size=10240)
+
+相关函数：map.lookup(), map.lookup_or_init(), map.delete(), map.update(), map.insert(), map.increment().
+
+3.BPF_ARRAY
+语法：BPF_ARRAY(name [, leaf_type [, size]])
+
+创建一个整数索引整列，用于快速查询和更新。
+
+默认参数如下：BPF_ARRAY(name, leaf_type=u64, size=10240)
+
+相关函数：map.lookup(), map.update(), map.increment()．
+
+整列中数据是预分配的，不能删除，所有没有删除操作了。
+
+4.BPF_HISTOGRAM
+语法：BPF_HISTOGRAM(name [, key_type [, size ]])
+
+创建一个直方图，默认是由64整型桶索引。
+
+相关函数：map.increment().
+
+5. BPF_STACK_TACK
+语法：BPF_STACK_TRACE(name, max_entries)
+
+创建一个栈跟踪映射，叫做stack_traces。相关函数：map.get_stackid().
+
+6.BPF_PERF_ARRAY
+语法：BPF_PERF_ARRAY(name, max_entries)
+
+创建perf array，参数中max_entries保持和系统中CPU数量一致。这个映射用于获取硬件性能计数器.
+
+
+7.BPF_PERCPU_ARRAY
+语法：BPF_PERCPU_ARRAY(name [, leaf_type [, size]])
+
+创建NUM_CPU个整数索引数组，优化了快速查找和更新。每个CPU的数组相互之间不用同步。
+
+8.BPF_LPM_TRIE
+语法：BPF_LPM_TRIE(name [, key_type [, leaf_type [, size]]])
+
+创建LPM trie映射。
+
+9.BPF_PROG_ARRAY
+语法：BPF_PROG_ARRAY(name, size)
+
+创建映射程序的数组，每个值要么是一个文件描述符指向bpf程序要么是NULL.
+
+这个数组可以作为跳转表，可以同跳转到其他的bpf程序。
+
+相关函数：map.call()
+
+10. Map.lookup
+语法：*val map.lookup(&key)
+
+寻找map中键为key的值，如果存在则返回指向该健值的指针。
+
+11. Map.lookup_or_init
+语法：*val map.lookup_or_init(&key, &zero)
+
+在map中寻找键，找到返回健值的指针，找不到则初始化为第二个参数。
+
+12. Map.delete
+从map中删除某个健值。
+
+13. Map.update
+语法：map.update(&key, &val)
+
+更新健值。
+
+14. Map.insert
+插入健值。
+
+15. Map.increment
+增加指定键的值，用于直方图。
+
+16. Map.get_stackid
+该函数从堆栈中寻找指定参数，返回栈跟踪的唯一ID。
+
+17. Map.perf_read
+从BPF_PERF_ARRAY中定义的数组返回硬件性能计数。
+
+18. Map.call
+语法：void map.call(void *ctx, int index)
+
+调用bpf_tail_call来执行BPF_PROG_ARRAY数值中索引指向的程序，调用方式为tail-call表示不会返回到原先调用的函数
+
+
+________________________________________________
+
+参考资料：https://blog.csdn.net/qq_44927248/article/details/127497205
+
+                   https://zhuanlan.zhihu.com/p/456482334
+
+                   https://www.jianshu.com/p/47475ffe8b50
+
+                   https://www.cnblogs.com/wangjq19920210/p/15917993.html  /* tc xdp hook点的区别 */
+
+                   https://blog.csdn.net/qq_45675153/article/details/128354712 /* NAT 功能使用的 BPF_MAP_TYPE_LPM_TRIE map详述 */

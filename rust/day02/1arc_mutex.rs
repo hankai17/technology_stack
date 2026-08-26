@@ -40,6 +40,7 @@ impl Registry {
 // 这是 “Newtype + Interior Mutability” 的经典组合模式
 // Registry 对外 只暴露干净的 API
 // RegistryInner 对内  可换成 DashMap、parking_lot、lock-free 结构
+// 即Registry 尽可能的对外提供&self语义的接口
 
 
 

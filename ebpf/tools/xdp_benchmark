@@ -1,0 +1,1518 @@
+#!/bin/bash
+
+# 在脚本开头添加
+trap cleanup SIGINT SIGTERM
+
+cleanup() {
+    echo -e "\n${YELLOW}正在清理测试环境...${NC}"
+    ssh ${SSH_USER}@${SERVER_IP} "pkill -9 iperf3; pkill -9 mpstat" 2>/dev/null
+    pkill -9 iperf3 2>/dev/null
+    exit 1
+}
+
+# 在其他配置参数后面添加
+START_PORT=${START_PORT:-5201}  # 默认从5201开始
+
+THREADS=${THREADS:-$(nproc)}  # 默认使用CPU核心数
+
+STAGES=(
+    "环境准备"
+    "无XDP基准测试"
+    "启用XDP测试"
+    "XDP+黑名单测试"
+    "XDP+白名单测试"
+    "收尾工作"
+)
+
+# 显示帮助信息的函数
+show_usage() {
+    echo "用法: $0 [-s <阶段号>] [-t <线程数>] [-p <起始端口>] [-h]"
+    echo "选项:"
+    echo "  -s <阶段号>    指定要运行的阶段(1-${#STAGES[@]}), 多个阶段用逗号分隔"
+    echo "  -t <线程数>    指定测试线程数（默认：CPU核心数）"
+    echo "  -p <起始端口>  指定起始端口号（默认：5201）"
+    echo "  -h            显示此帮助信息"
+    echo
+    echo "可用阶段:"
+    for i in "${!STAGES[@]}"; do
+        echo "  $((i+1)). ${STAGES[$i]}"
+    done
+    echo
+    echo "示例:"
+    echo "  $0                 # 运行所有阶段"
+    echo "  $0 -s 2           # 只运行无XDP基准测试"
+    echo "  $0 -s 2,3         # 运行无XDP基准测试和启用XDP测试"
+    echo "  $0 -s 1,3,5       # 运行环境准备、启用XDP测试和收尾工作"
+}
+
+# 验证阶段号的函数
+validate_stages() {
+    local stages=$1
+    local valid=true
+    
+    # 检查格式
+    if ! echo "$stages" | grep -qE '^[0-9]+(,[0-9]+)*$'; then
+        echo -e "${RED}错误: 无效的阶段格式。请使用逗号分隔的数字。${NC}"
+        return 1
+    fi  # 这里缺少了一个 fi
+    
+    # 检查每个阶段号是否有效
+    for stage in $(echo "$stages" | tr ',' ' '); do
+        if [ "$stage" -lt 1 ] || [ "$stage" -gt "${#STAGES[@]}" ]; then
+            echo -e "${RED}错误: 无效的阶段号 $stage。有效范围: 1-${#STAGES[@]}${NC}"
+            valid=false
+        fi
+    done
+    
+    [ "$valid" = true ]
+}
+
+
+# 颜色定义
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# 配置
+SERVER_IP="10.144.114.142"
+SSH_USER="root"
+TEST_DURATION=60  # 修改为60秒
+SMALL_PACKET=200
+LARGE_PACKET=1400
+PPS_PACKET=64
+XDP_PATH="/Application/KEDGE_DDoS/xdp_toolkit"
+BPFTOOL="${XDP_PATH}/bpftool/sbin/bpftool"
+BLACKLIST_SIZE=50000
+WHITELIST_SIZE=50000   
+
+
+# 系统性能优化参数
+SYSCTL_PARAMS=(
+    "net.core.rmem_max=268435456"
+    "net.core.wmem_max=268435456"
+    "net.core.rmem_default=268435456"
+    "net.core.wmem_default=268435456"
+    "net.ipv4.tcp_rmem=4096 87380 268435456"
+    "net.ipv4.tcp_wmem=4096 87380 268435456"
+    "net.core.netdev_budget=1000"
+    "net.core.netdev_budget_usecs=2000"
+    "net.ipv4.tcp_max_syn_backlog=32768"
+    "net.core.somaxconn=65535"
+    "net.ipv4.tcp_max_tw_buckets=1440000"
+    "net.ipv4.tcp_tw_reuse=1"
+    "net.ipv4.tcp_fin_timeout=10"
+    "net.ipv4.tcp_slow_start_after_idle=0"
+    "net.ipv4.tcp_mtu_probing=1"
+    "net.core.optmem_max=268435456"
+    "net.ipv4.ip_local_port_range=1024 65535"
+    "net.ipv4.tcp_window_scaling=1"
+    "net.ipv4.tcp_timestamps=1"
+    "net.ipv4.tcp_sack=1"
+)
+
+# 检查本地依赖
+install_local_dependencies() {
+    echo -e "${BLUE}[*] 检查本地依赖...${NC}"
+    if [ -f /etc/redhat-release ]; then
+        sudo yum install -y epel-release iperf3 jq bc ethtool
+    elif [ -f /etc/debian_version ]; then
+        sudo apt-get update
+        sudo apt-get install -y iperf3 jq bc ethtool
+    else
+        echo -e "${RED}错误: 不支持的操作系统${NC}"
+        exit 1
+    fi
+}
+
+# 系统参数优化
+optimize_system() {
+    local host=$1
+    local is_remote=$2
+    
+    echo -e "${BLUE}[*] 优化系统参数 ($host)...${NC}"
+    
+    if [ "$is_remote" = "true" ]; then
+        ssh ${SSH_USER}@${SERVER_IP} "
+            # 应用系统参数
+            for param in \"${SYSCTL_PARAMS[@]}\"; do
+                sysctl -w \$param >/dev/null 2>&1
+            done
+            
+            # CPU和中断优化
+            num_cores=\$(nproc)
+            
+            # 网卡队列优化
+            ethtool -G eth0 rx 4096 tx 4096 2>/dev/null || true
+            ethtool -K eth0 gro on gso on tso on sg on tx-nocache-copy off 2>/dev/null || true
+            ethtool -A eth0 autoneg off rx off tx off 2>/dev/null || true
+            ethtool -L eth0 combined \$num_cores 2>/dev/null || true
+            
+            # 增加传输队列长度
+            ip link set eth0 txqueuelen 10000 2>/dev/null || true
+            
+            # IRQ亲和性优化
+            eth_interrupts=\$(cat /proc/interrupts | grep eth0 | awk '{print \$1}' | tr -d ':')
+            core=0
+            for irq in \$eth_interrupts; do
+                echo \$core > /proc/irq/\$irq/smp_affinity_list 2>/dev/null || true
+                core=\$(( (core + 1) % num_cores ))
+            done
+            
+            # RPS/RFS优化
+            echo 32768 > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null || true
+            for queue in /sys/class/net/eth0/queues/rx-*; do
+                echo 4096 > \$queue/rps_flow_cnt 2>/dev/null || true
+            done
+            
+            # 设置RPS CPU掩码
+            all_mask=\$(printf '%x' \$((2**\$num_cores-1)))
+            for rx in /sys/class/net/eth0/queues/rx-*/rps_cpus; do
+                echo \$all_mask > \$rx 2>/dev/null || true
+            done
+            
+            # 其他网络优化
+            echo 1000000 > /proc/sys/net/core/netdev_budget 2>/dev/null || true
+            echo 300 > /proc/sys/net/core/netdev_budget_usecs 2>/dev/null || true
+            
+            # 启用网卡多队列
+            num_queues=\$(ethtool -l eth0 2>/dev/null | grep -i \"combined\" | head -n1 | awk '{print \$2}')
+            if [ ! -z \"\$num_queues\" ]; then
+                ethtool -L eth0 combined \$num_queues 2>/dev/null || true
+            fi
+            
+            # 禁用irqbalance服务
+            systemctl stop irqbalance 2>/dev/null || true
+            systemctl disable irqbalance 2>/dev/null || true
+        "
+    else
+        # 本地系统优化
+        # 应用系统参数
+        for param in "${SYSCTL_PARAMS[@]}"; do
+            sysctl -w "$param" >/dev/null 2>&1
+        done
+        
+        # 网卡优化
+        sudo ethtool -G eth0 rx 4096 tx 4096 2>/dev/null || true
+        sudo ethtool -K eth0 gro on gso on tso on sg on tx-nocache-copy off 2>/dev/null || true
+        sudo ethtool -A eth0 autoneg off rx off tx off 2>/dev/null || true
+        sudo ethtool -L eth0 combined $(nproc) 2>/dev/null || true
+        
+        # 增加传输队列长度
+        sudo ip link set eth0 txqueuelen 10000 2>/dev/null || true
+        
+        # 本地其他优化参数
+        echo 1000000 | sudo tee /proc/sys/net/core/netdev_budget >/dev/null 2>&1
+        echo 300 | sudo tee /proc/sys/net/core/netdev_budget_usecs >/dev/null 2>&1
+    fi
+}
+
+# 准备服务端环境
+setup_server() {
+    echo -e "${BLUE}[*] 准备服务端环境...${NC}"
+    
+    ssh ${SSH_USER}@${SERVER_IP} "
+        # 安装依赖
+        if [ -f /etc/redhat-release ]; then
+            echo '安装必要软件包...'
+            yum install -y epel-release iperf3 sysstat ethtool >/dev/null 2>&1
+        elif [ -f /etc/debian_version ]; then
+            echo '安装必要软件包...'
+            apt-get update >/dev/null 2>&1
+            apt-get install -y iperf3 sysstat ethtool >/dev/null 2>&1
+        fi
+        
+        # 系统优化
+        echo '优化系统参数...'
+        for param in \
+            \"net.core.rmem_max=268435456\" \
+            \"net.core.wmem_max=268435456\" \
+            \"net.core.rmem_default=268435456\" \
+            \"net.core.wmem_default=268435456\" \
+            \"net.ipv4.tcp_rmem=4096 87380 268435456\" \
+            \"net.ipv4.tcp_wmem=4096 87380 268435456\" \
+            \"net.core.netdev_budget=1000\" \
+            \"net.core.netdev_budget_usecs=2000\" \
+            \"net.ipv4.tcp_max_syn_backlog=32768\" \
+            \"net.core.somaxconn=65535\" \
+            \"net.ipv4.tcp_max_tw_buckets=1440000\" \
+            \"net.ipv4.tcp_tw_reuse=1\" \
+            \"net.ipv4.tcp_fin_timeout=10\" \
+            \"net.ipv4.tcp_slow_start_after_idle=0\" \
+            \"net.ipv4.tcp_mtu_probing=1\" \
+            \"net.core.optmem_max=268435456\" \
+            \"net.ipv4.ip_local_port_range=1024 65535\" \
+            \"net.ipv4.tcp_window_scaling=1\" \
+            \"net.ipv4.tcp_timestamps=1\" \
+            \"net.ipv4.tcp_sack=1\"; do
+            sysctl -w \$param >/dev/null 2>&1
+        done
+        
+        # 网卡优化
+        echo '优化网卡参数...'
+        ethtool -G eth0 rx 4096 tx 4096 2>/dev/null || true
+        ethtool -K eth0 gro on gso on tso on sg on tx-nocache-copy off 2>/dev/null || true
+        ethtool -A eth0 autoneg off rx off tx off 2>/dev/null || true
+        
+        # 设置队列长度
+        ip link set eth0 txqueuelen 10000 2>/dev/null || true
+        
+        # 创建并清理测试目录
+        echo '准备测试目录...'
+        mkdir -p ${XDP_PATH}/test_results
+        chmod 777 ${XDP_PATH}/test_results
+        rm -rf ${XDP_PATH}/test_results/*
+        
+        # 清理现有程序和进程
+        echo '清理现有环境...'
+        ${BPFTOOL} net detach xdp dev eth0 2>/dev/null || true
+        rm -f /sys/fs/bpf/xdp_filter 2>/dev/null || true
+        rm -f /sys/fs/bpf/log_buffer 2>/dev/null || true
+        
+        # 停止旧进程
+        pkill -9 iperf3 2>/dev/null || true
+        pkill -9 mpstat 2>/dev/null || true
+        
+        # 等待进程完全停止
+        while pgrep -x iperf3 >/dev/null || pgrep -x mpstat >/dev/null; do
+            sleep 1
+        done
+        
+        # 验证环境
+        echo '验证环境配置...'
+        if ! command -v iperf3 >/dev/null 2>&1; then
+            echo '错误: iperf3 未安装成功'
+            exit 1
+        fi
+        
+        if ! command -v mpstat >/dev/null 2>&1; then
+            echo '错误: sysstat 未安装成功'
+            exit 1
+        fi
+        
+        # 确认网卡设置
+        if ! ip link show eth0 >/dev/null 2>&1; then
+            echo '错误: 未找到eth0网卡'
+            exit 1
+        fi
+        
+        echo '✓ 服务端环境准备就绪'
+    "
+    
+    local ret=$?
+    if [ $ret -eq 0 ]; then
+        echo -e "${GREEN}[+] 服务端环境准备完成${NC}"
+    else
+        echo -e "${RED}错误: 服务端环境准备失败 (返回码: $ret)${NC}"
+        exit 1
+    fi
+}
+
+# 创建本地测试目录
+setup_local() {
+    echo -e "${BLUE}[*] 准备本地环境...${NC}"
+    
+    # 清理并创建测试目录
+    if [ -d "test_results" ]; then
+        rm -rf test_results
+    fi
+    mkdir -p test_results
+    
+    # 优化本地系统
+    optimize_system "local" "false"
+}
+
+# 检查网络状态
+check_network() {
+    echo -e "${BLUE}[*] 检查网络状态...${NC}"
+    
+    # 本地网卡状态
+    echo "本地网卡状态："
+    ethtool eth0 | grep -E "Speed|Duplex|Link"
+    
+    # 服务端网卡状态
+    echo -e "\n服务端网卡状态："
+    ssh ${SSH_USER}@${SERVER_IP} "ethtool eth0 | grep -E 'Speed|Duplex|Link'"
+    
+    # 网络延迟测试
+    echo -e "\n网络延迟测试："
+    ping -c 5 $SERVER_IP
+    
+    # MTU检查
+    echo -e "\nMTU配置："
+    echo "本地MTU: $(ip link show eth0 | grep mtu)"
+    echo "服务端MTU: $(ssh ${SSH_USER}@${SERVER_IP} 'ip link show eth0 | grep mtu')"
+}
+
+# XDP操作
+xdp_operations() {
+    local action=$1
+    
+    case "$action" in
+        "load")
+            echo -e "${BLUE}[*] 加载XDP程序...${NC}"
+            ssh ${SSH_USER}@${SERVER_IP} "
+                # 确保目录存在
+                mkdir -p /sys/fs/bpf
+                
+                # 完全清理旧的XDP程序
+                ${BPFTOOL} net detach xdp dev eth0 2>/dev/null || true
+                rm -f /sys/fs/bpf/xdp_filter 2>/dev/null || true
+                sleep 1
+                
+                # 检查程序文件
+                if [ ! -f ${XDP_PATH}/xdp_filter.o ]; then
+                    echo '错误: XDP程序文件不存在'
+                    ls -l ${XDP_PATH}/
+                    exit 1
+                fi
+                
+                # 加载新程序
+                cd ${XDP_PATH}
+                ${BPFTOOL} prog load xdp_filter.o /sys/fs/bpf/xdp_filter type xdp
+                if [ \$? -ne 0 ]; then
+                    echo '错误: 加载XDP程序失败'
+                    exit 1
+                fi
+                
+                # 附加到网卡
+                ${BPFTOOL} net attach xdp pinned /sys/fs/bpf/xdp_filter dev eth0
+                if [ \$? -ne 0 ]; then
+                    echo '错误: 附加XDP程序到网卡失败'
+                    exit 1
+                fi
+                
+                # 验证XDP程序状态
+                if ${BPFTOOL} net show dev eth0 | grep -q 'xdp'; then
+                    echo '✓ XDP程序加载成功'
+                    ${BPFTOOL} net show dev eth0
+                else
+                    echo '错误: XDP程序未成功附加'
+                    exit 1
+                fi
+            "
+            ;;
+            
+        "unload")
+            echo -e "${BLUE}[*] 卸载XDP程序...${NC}"
+            ssh ${SSH_USER}@${SERVER_IP} "
+                ${BPFTOOL} net detach xdp dev eth0 2>/dev/null || true
+                rm -f /sys/fs/bpf/xdp_filter 2>/dev/null || true
+                echo '✓ XDP程序已卸载'
+            "
+            ;;
+    esac
+    
+    local ret=$?
+    if [ $ret -ne 0 ]; then
+        echo -e "${RED}XDP操作失败 (返回码: $ret)${NC}"
+        return 1
+    fi
+}
+
+# 获取map ID通过名称
+get_map_id() {
+    local map_name=$1
+    ssh ${SSH_USER}@${SERVER_IP} "
+        prog_id=\$(${BPFTOOL} prog show | grep xdp_filter | awk '{print \$1}' | sed 's/://')
+        if [ -z \"\$prog_id\" ]; then
+            exit 1
+        fi
+        
+        map_ids=\$(${BPFTOOL} prog show id \$prog_id | grep map_ids | sed 's/.*map_ids //' | tr -d '[]' | tr ',' ' ')
+        
+        for map_id in \$map_ids; do
+            name=\$(${BPFTOOL} map show id \$map_id | grep name | awk '{print \$3}')
+            if [ \"\$name\" = \"$map_name\" ]; then
+                echo \$map_id
+                exit 0
+            fi
+        done
+        exit 1
+    "
+}
+
+# 白名单管理
+manage_whitelist() {
+    local action=$1
+    
+    echo -e "${BLUE}[*] 白名单操作: $action${NC}"
+    
+    ssh ${SSH_USER}@${SERVER_IP} "
+        # 首先检查XDP程序是否已加载
+        if ! ${BPFTOOL} net show dev eth0 | grep -q 'xdp'; then
+            echo '错误: XDP程序未加载'
+            ${BPFTOOL} net show dev eth0
+            exit 1
+        fi
+        
+        # 获取XDP程序ID (使用driver id)
+        prog_id=\$(${BPFTOOL} net show dev eth0 | grep 'driver id' | awk '{print \$NF}')
+        if [ -z \"\$prog_id\" ]; then
+            echo '错误: 无法获取XDP程序ID'
+            echo '当前XDP状态:'
+            ${BPFTOOL} net show dev eth0
+            exit 1
+        fi
+        
+        echo \"找到XDP程序ID: \$prog_id\"
+        
+        # 获取map IDs (使用更直接的方式)
+        map_info=\$(${BPFTOOL} prog show id \$prog_id)
+        echo \"程序信息: \$map_info\"
+        
+        map_ids=\$(echo \"\$map_info\" | grep -oP 'map_ids \K[0-9,]+' | tr -d '[]' || true)
+        if [ -z \"\$map_ids\" ]; then
+            echo '错误: 无法获取map IDs'
+            echo '程序详情:'
+            echo \"\$map_info\"
+            exit 1
+        fi
+        
+        echo \"找到map IDs: \$map_ids\"
+        
+        # 查找whitelist_v4的map ID
+        whitelist_map_id=''
+        for id in \$(echo \$map_ids | tr ',' ' '); do
+            map_info=\$(${BPFTOOL} map show id \$id 2>/dev/null)
+            if echo \"\$map_info\" | grep -q 'name whitelist_v4'; then
+                whitelist_map_id=\$id
+                break
+            fi
+        done
+        
+        if [ -z \"\$whitelist_map_id\" ]; then
+            echo '错误: 未找到whitelist_v4 map'
+            echo '可用的maps:'
+            for id in \$(echo \$map_ids | tr ',' ' '); do
+                echo \"Map ID \$id:\"
+                ${BPFTOOL} map show id \$id 2>/dev/null || echo \"(无法访问)\"
+            done
+            exit 1
+        fi
+        
+        echo \"找到whitelist_v4 map ID: \$whitelist_map_id\"
+        
+        case \"$action\" in
+            \"add\")
+                echo '添加IP到白名单...'
+                total_ips=$WHITELIST_SIZE
+                batch_size=\$(( total_ips / 10 ))  # 每次添加总量的十分之一
+                
+                while true; do
+                    # 获取当前白名单数量
+                    start_count=\$(${BPFTOOL} map dump id \$whitelist_map_id | wc -l)
+                    
+                    if [ \$start_count -ge \$total_ips ]; then
+                        echo \"✓ 白名单已完成 (当前: \$start_count, 目标: \$total_ips)\"
+                        break
+                    fi
+                    
+                    # 计算本次需要添加的数量
+                    remaining=\$(( total_ips - start_count ))
+                    current_batch=\$(( remaining > batch_size ? batch_size : remaining ))
+                    
+                    echo \"当前进度: \$start_count/\$total_ips\"
+                    echo \"本次将添加: \$current_batch 个IP\"
+                    
+                    # 计算起始值
+                    # 从10.1.1.1开始，确保不会生成0.0.0.0
+                    base_count=\$start_count
+                    section=\$(( (base_count / 250) + 1 ))
+                    ip=\$(( (base_count % 250) + 1 ))
+                    
+                    # 创建临时批处理文件
+                    tmp_file=\$(mktemp)
+                    count=0
+                    
+                    echo \"生成批处理命令...\"
+                    while [ \$count -lt \$current_batch ]; do
+                        # 确保section不超过254
+                        if [ \$section -gt 254 ]; then
+                            echo \"错误: IP地址段超出范围\"
+                            rm -f \$tmp_file
+                            exit 1
+                        fi
+                        
+                        # 确保IP地址有效
+                        if [ \$section -gt 0 ] && [ \$ip -gt 0 ] && [ \$ip -lt 255 ]; then
+                            printf 'map update id %d key hex 0a 01 %02x %02x value hex 00 00 00 01\n' \
+                                \$whitelist_map_id \$section \$ip >> \$tmp_file
+                            
+                            count=\$((count + 1))
+                            if [ \$((count % 1000)) -eq 0 ]; then
+                                printf \"\\r生成进度: %d/%d (当前IP: 10.1.%d.%d)\" \
+                                    \$count \$current_batch \$section \$ip
+                            fi
+                        fi
+                        
+                        # 更新IP地址计数
+                        ip=\$((ip + 1))
+                        if [ \$ip -ge 255 ]; then
+                            ip=1
+                            section=\$((section + 1))
+                        fi
+                    done
+                    
+                    # 执行批处理命令
+                    echo -e \"\\n执行批量更新...\"
+                    ${BPFTOOL} batch file \$tmp_file
+                    
+                    # 清理临时文件
+                    rm -f \$tmp_file
+                    
+                    # 验证本次添加
+                    new_count=\$(${BPFTOOL} map dump id \$whitelist_map_id | wc -l)
+                    added=\$(( new_count - start_count ))
+                    echo \"本批次添加完成:\"
+                    echo \"- 起始数量: \$start_count\"
+                    echo \"- 当前数量: \$new_count\"
+                    echo \"- 实际添加: \$added\"
+                    echo \"- 预期添加: \$current_batch\"
+                    
+                    if [ \$added -ne \$current_batch ]; then
+                        echo \"✗ 警告: 添加数量不符合预期\"
+                        exit 1
+                    fi
+                    
+                    # 验证添加的IP是否正确
+                    echo \"验证新添加的IP:\"
+                    ${BPFTOOL} map dump id \$whitelist_map_id | tail -n 5 | while read -r line; do
+                        key=\$(echo \$line | grep -oP 'key: \\K[0-9a-f ]+' | tr -d ' ')
+                        if [ -n \"\$key\" ]; then
+                            a=\$((0x\${key:0:2}))
+                            b=\$((0x\${key:2:2}))
+                            c=\$((0x\${key:4:2}))
+                            d=\$((0x\${key:6:2}))
+                            if [ \$a -eq 0 ] || [ \$b -eq 0 ] || [ \$c -eq 0 ] || [ \$d -eq 0 ] || \
+                               [ \$d -eq 255 ]; then
+                                echo \"警告: 检测到无效IP: \$a.\$b.\$c.\$d\"
+                                exit 1
+                            fi
+                        fi
+                    done
+                    
+                    echo \"当前总进度: \$new_count/\$total_ips\"
+                    echo \"\"
+                done
+                
+                # 最终验证
+                final_count=\$(${BPFTOOL} map dump id \$whitelist_map_id | wc -l)
+                echo \"白名单添加完成:\"
+                echo \"预期总数: \$total_ips\"
+                echo \"实际总数: \$final_count\"
+                
+                if [ \$final_count -eq \$total_ips ]; then
+                    echo \"✓ 验证成功: 总数符合预期\"
+                else
+                    echo \"✗ 验证失败: 总数不符合预期\"
+                    exit 1
+                fi
+                ;;
+                
+            \"clear\")
+                echo '清空白名单...'
+                ${BPFTOOL} map flush id \$whitelist_map_id >/dev/null 2>&1
+                count=\$(${BPFTOOL} map dump id \$whitelist_map_id | wc -l)
+                echo \"白名单已清空 (当前条目数: \$count)\"
+                ;;
+                
+            \"count\")
+                count=\$(${BPFTOOL} map dump id \$whitelist_map_id | wc -l)
+                echo \"当前白名单包含 \$count 个IP\"
+                ;;
+        esac
+    "
+    
+    local ret=$?
+    if [ $ret -ne 0 ]; then
+        echo -e "${RED}白名单操作失败 (返回码: $ret)${NC}"
+        return 1
+    fi
+}
+
+
+# 黑名单管理
+manage_blacklist() {
+    local action=$1
+    
+    echo -e "${BLUE}[*] 黑名单操作: $action${NC}"
+    
+    ssh ${SSH_USER}@${SERVER_IP} "
+        # 首先检查XDP程序是否已加载
+        if ! ${BPFTOOL} net show dev eth0 | grep -q 'xdp'; then
+            echo '错误: XDP程序未加载'
+            ${BPFTOOL} net show dev eth0
+            exit 1
+        fi
+        
+        # 获取XDP程序ID (使用driver id)
+        prog_id=\$(${BPFTOOL} net show dev eth0 | grep 'driver id' | awk '{print \$NF}')
+        if [ -z \"\$prog_id\" ]; then
+            echo '错误: 无法获取XDP程序ID'
+            echo '当前XDP状态:'
+            ${BPFTOOL} net show dev eth0
+            exit 1
+        fi
+        
+        echo \"找到XDP程序ID: \$prog_id\"
+        
+        # 获取map IDs (使用更直接的方式)
+        map_info=\$(${BPFTOOL} prog show id \$prog_id)
+        echo \"程序信息: \$map_info\"
+        
+        map_ids=\$(echo \"\$map_info\" | grep -oP 'map_ids \K[0-9,]+' | tr -d '[]' || true)
+        if [ -z \"\$map_ids\" ]; then
+            echo '错误: 无法获取map IDs'
+            echo '程序详情:'
+            echo \"\$map_info\"
+            exit 1
+        fi
+        
+        echo \"找到map IDs: \$map_ids\"
+        
+        # 查找blacklist_v4的map ID
+        blacklist_map_id=''
+        for id in \$(echo \$map_ids | tr ',' ' '); do
+            map_info=\$(${BPFTOOL} map show id \$id 2>/dev/null)
+            if echo \"\$map_info\" | grep -q 'name blacklist_v4'; then
+                blacklist_map_id=\$id
+                break
+            fi
+        done
+        
+        if [ -z \"\$blacklist_map_id\" ]; then
+            echo '错误: 未找到blacklist_v4 map'
+            echo '可用的maps:'
+            for id in \$(echo \$map_ids | tr ',' ' '); do
+                echo \"Map ID \$id:\"
+                ${BPFTOOL} map show id \$id 2>/dev/null || echo \"(无法访问)\"
+            done
+            exit 1
+        fi
+        
+        echo \"找到blacklist_v4 map ID: \$blacklist_map_id\"
+        
+        case \"$action\" in
+            \"add\")
+                echo '添加IP到黑名单...'
+                total_ips=$BLACKLIST_SIZE
+                batch_size=\$(( total_ips / 10 ))  # 每次添加总量的十分之一
+                
+                while true; do
+                    # 获取当前黑名单数量
+                    start_count=\$(${BPFTOOL} map dump id \$blacklist_map_id | wc -l)
+                    
+                    if [ \$start_count -ge \$total_ips ]; then
+                        echo \"✓ 黑名单已完成 (当前: \$start_count, 目标: \$total_ips)\"
+                        break
+                    fi
+                    
+                    # 计算本次需要添加的数量
+                    remaining=\$(( total_ips - start_count ))
+                    current_batch=\$(( remaining > batch_size ? batch_size : remaining ))
+                    
+                    echo \"当前进度: \$start_count/\$total_ips\"
+                    echo \"本次将添加: \$current_batch 个IP\"
+                    
+                    # 计算起始值
+                    # 从10.1.1.1开始，确保不会生成0.0.0.0
+                    base_count=\$start_count
+                    section=\$(( (base_count / 250) + 1 ))
+                    ip=\$(( (base_count % 250) + 1 ))
+                    
+                    # 创建临时批处理文件
+                    tmp_file=\$(mktemp)
+                    count=0
+                    
+                    echo \"生成批处理命令...\"
+                    while [ \$count -lt \$current_batch ]; do
+                        # 确保section不超过254
+                        if [ \$section -gt 254 ]; then
+                            echo \"错误: IP地址段超出范围\"
+                            rm -f \$tmp_file
+                            exit 1
+                        fi
+                        
+                        # 确保IP地址有效
+                        if [ \$section -gt 0 ] && [ \$ip -gt 0 ] && [ \$ip -lt 255 ]; then
+                            printf 'map update id %d key hex 0a 01 %02x %02x value hex 00 00 00 01\n' \
+                                \$blacklist_map_id \$section \$ip >> \$tmp_file
+                            
+                            count=\$((count + 1))
+                            if [ \$((count % 1000)) -eq 0 ]; then
+                                printf \"\\r生成进度: %d/%d (当前IP: 10.1.%d.%d)\" \
+                                    \$count \$current_batch \$section \$ip
+                            fi
+                        fi
+                        
+                        # 更新IP地址计数
+                        ip=\$((ip + 1))
+                        if [ \$ip -ge 255 ]; then
+                            ip=1
+                            section=\$((section + 1))
+                        fi
+                    done
+                    
+                    # 执行批处理命令
+                    echo -e \"\\n执行批量更新...\"
+                    ${BPFTOOL} batch file \$tmp_file
+                    
+                    # 清理临时文件
+                    rm -f \$tmp_file
+                    
+                    # 验证本次添加
+                    new_count=\$(${BPFTOOL} map dump id \$blacklist_map_id | wc -l)
+                    added=\$(( new_count - start_count ))
+                    echo \"本批次添加完成:\"
+                    echo \"- 起始数量: \$start_count\"
+                    echo \"- 当前数量: \$new_count\"
+                    echo \"- 实际添加: \$added\"
+                    echo \"- 预期添加: \$current_batch\"
+                    
+                    if [ \$added -ne \$current_batch ]; then
+                        echo \"✗ 警告: 添加数量不符合预期\"
+                        exit 1
+                    fi
+                    
+                    # 验证添加的IP是否正确
+                    echo \"验证新添加的IP:\"
+                    ${BPFTOOL} map dump id \$blacklist_map_id | tail -n 5 | while read -r line; do
+                        key=\$(echo \$line | grep -oP 'key: \\K[0-9a-f ]+' | tr -d ' ')
+                        if [ -n \"\$key\" ]; then
+                            a=\$((0x\${key:0:2}))
+                            b=\$((0x\${key:2:2}))
+                            c=\$((0x\${key:4:2}))
+                            d=\$((0x\${key:6:2}))
+                            if [ \$a -eq 0 ] || [ \$b -eq 0 ] || [ \$c -eq 0 ] || [ \$d -eq 0 ] || \
+                               [ \$d -eq 255 ]; then
+                                echo \"警告: 检测到无效IP: \$a.\$b.\$c.\$d\"
+                                exit 1
+                            fi
+                        fi
+                    done
+                    
+                    echo \"当前总进度: \$new_count/\$total_ips\"
+                    echo \"\"
+                done
+                
+                # 最终验证
+                final_count=\$(${BPFTOOL} map dump id \$blacklist_map_id | wc -l)
+                echo \"黑名单添加完成:\"
+                echo \"预期总数: \$total_ips\"
+                echo \"实际总数: \$final_count\"
+                
+                if [ \$final_count -eq \$total_ips ]; then
+                    echo \"✓ 验证成功: 总数符合预期\"
+                else
+                    echo \"✗ 验证失败: 总数不符合预期\"
+                    exit 1
+                fi
+                ;;
+                
+            \"clear\")
+                echo '清空黑名单...'
+                ${BPFTOOL} map flush id \$blacklist_map_id >/dev/null 2>&1
+                count=\$(${BPFTOOL} map dump id \$blacklist_map_id | wc -l)
+                echo \"黑名单已清空 (当前条目数: \$count)\"
+                ;;
+                
+            \"count\")
+                count=\$(${BPFTOOL} map dump id \$blacklist_map_id | wc -l)
+                echo \"当前黑名单包含 \$count 个IP\"
+                ;;
+        esac
+    "
+    
+    local ret=$?
+    if [ $ret -ne 0 ]; then
+        echo -e "${RED}黑名单操作失败 (返回码: $ret)${NC}"
+        return 1
+    fi
+}
+
+
+run_test() {
+    local test_name=$1
+    local packet_size=$2
+    local description=$3
+    
+    # 参数验证
+    if [ -z "$packet_size" ]; then
+        echo -e "${RED}错误: 无效的包大小${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}[+] 开始测试: $description (包大小: $packet_size bytes)${NC}"
+    
+    # 确保测试结果目录存在
+    local result_dir="test_results/${test_name}_${packet_size}"
+    rm -rf "$result_dir"  # 清理可能存在的旧目录
+    mkdir -p "$result_dir"
+    
+    # 1. 停止所有旧进程并等待完全停止
+    echo "停止旧进程..."
+    ssh -q ${SSH_USER}@${SERVER_IP} "
+        pkill -9 iperf3 2>/dev/null || true
+        pkill -9 mpstat 2>/dev/null || true
+        sleep 1
+        while pgrep iperf3 >/dev/null; do
+            sleep 1
+        done
+    " 2>/dev/null
+    
+    # 2. 计算进程数（基于CPU核心数）
+    local num_cores=$(nproc)
+    local num_processes=$THREADS
+    echo "系统信息:"
+    echo "- CPU核心数: $num_cores"
+    echo "- 测试进程数: $num_processes"
+    
+    # 3. 启动服务端进程
+    echo "启动服务端进程..."
+    ssh -q ${SSH_USER}@${SERVER_IP} "
+        # 确保没有残留进程和端口
+        pkill -9 iperf3 2>/dev/null || true
+        sleep 1
+        while ss -tln | grep -q ':520[0-9]\\+'; do
+            sleep 1
+        done
+        
+        # 清理旧的日志文件
+        rm -f ${XDP_PATH}/test_results/iperf3_server_*.log
+        
+        # 提高系统限制
+        ulimit -n 1000000
+        sysctl -w net.core.somaxconn=65535 >/dev/null 2>&1
+        
+        # 创建启动脚本
+        cat > /tmp/start_iperf.sh << 'EOFMARKER'
+#!/bin/bash
+
+num_processes=\$1
+xdp_path=\$2
+num_cores=\$(nproc)
+START_PORT=\$3
+
+start_server() {
+    local port=\$1
+    local logfile=\$2
+    local cpu_id=\$((port - START_PORT))
+    cpu_id=\$((cpu_id % num_cores))
+    local max_retries=3
+    local retry=0
+    
+    #echo \"启动服务器: port=\${port} cpu=\${cpu_id}\"
+    
+    while [ \$retry -lt \$max_retries ]; do
+        if ss -tln | grep -q \":\${port}[[:space:]]\"; then
+            echo \"端口 \${port} 已被占用，正在清理...\"
+            fuser -k \${port}/tcp 2>/dev/null || true
+            sleep 1
+        fi
+        
+        # 使用基本的iperf3服务端参数
+        taskset -c \${cpu_id} iperf3 \
+            -s \
+            -p \${port} \
+            -D \
+            -1 \
+            --logfile \"\${logfile}\"
+        
+        for ((i=0; i<10; i++)); do
+            if ss -tln | grep -q \":\${port}[[:space:]]\"; then
+                return 0
+            fi
+            sleep 0.1
+        done
+        
+        retry=\$((retry + 1))
+        [ \$retry -lt \$max_retries ] && sleep 1
+    done
+    
+    return 1
+}
+
+verify_servers() {
+    local expected_count=\$1
+    local port_base=\$START_PORT
+    local all_ok=true
+    
+    for ((port=port_base; port<port_base+expected_count; port++)); do
+        if ! ss -tln | grep -q \":\${port}[[:space:]]\"; then
+            echo \"端口 \${port} 未正常监听\"
+            all_ok=false
+        fi
+    done
+    
+    if [ \"\$all_ok\" = true ]; then
+        return 0
+    else
+        echo \"当前监听的端口:\"
+        ss -tln | grep -E \":\${START_PORT}[0-9]*\"
+        echo \"当前运行的iperf3进程:\"
+        ps aux | grep iperf3 | grep -v grep
+        return 1
+    fi
+}
+
+# 启动所有服务器进程
+echo \"正在启动 \${num_processes} 个服务器进程...\"
+failed_ports=()
+success_count=0
+
+for ((port=START_PORT; port<START_PORT+num_processes; port++)); do
+    logfile=\"\${xdp_path}/test_results/iperf3_server_\${port}.log\"
+    if start_server \"\${port}\" \"\${logfile}\"; then
+        echo -n \".\"
+        success_count=\$((success_count + 1))
+    else
+        failed_ports+=(\"\${port}\")
+        echo \"F\"
+    fi
+done
+echo
+
+sleep 1
+
+if verify_servers \"\$num_processes\"; then
+    echo \"所有服务器进程启动并验证成功 (\${success_count}/\${num_processes})\"
+    exit 0
+else
+    echo \"服务器验证失败\"
+    echo \"启动失败的端口: \${failed_ports[*]}\"
+    echo \"成功启动数量: \${success_count}/\${num_processes}\"
+    exit 1
+fi
+EOFMARKER
+
+        chmod +x /tmp/start_iperf.sh
+        /tmp/start_iperf.sh $num_processes $XDP_PATH $START_PORT
+        status=\$?
+        rm -f /tmp/start_iperf.sh
+        exit \$status
+    "
+    
+    local server_status=$?
+    if [ $server_status -ne 0 ]; then
+        echo -e "${RED}错误: 服务端启动失败${NC}"
+        return 1
+    fi
+    
+    echo "等待服务就绪..."
+    sleep 5
+    
+    echo "执行最终验证..."
+    local verify_status=$(ssh -q ${SSH_USER}@${SERVER_IP} "
+        failures=0
+        for ((port=$START_PORT; port<$START_PORT+$num_processes; port++)); do
+            if ! ss -tln | grep -q \":\${port}[[:space:]]\"; then
+                echo \"端口 \${port} 未就绪\"
+                failures=\$((failures + 1))
+            fi
+        done
+        echo \$failures
+    ")
+    
+    if ! [[ "$verify_status" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}错误: 验证状态无效${NC}"
+        return 1
+    fi
+    
+    if [ "$verify_status" -ne 0 ]; then
+        echo -e "${RED}错误: 存在 $verify_status 个端口未就绪${NC}"
+        return 1
+    fi
+    
+    # 5. 启动客户端测试
+    echo "开始性能测试..."
+    local pids=()
+    for ((port=START_PORT; port<START_PORT+num_processes; port++)); do
+        local cpu_id=$((port - START_PORT))
+        cpu_id=$((cpu_id % num_cores))
+        #echo "启动客户端: port=${port} cpu=${cpu_id}"
+        # 使用基本的iperf3客户端参数
+        taskset -c $cpu_id iperf3 \
+            -c "$SERVER_IP" \
+            -p $port \
+            -l $packet_size \
+            -t $TEST_DURATION \
+            -i 1 \
+            -Z \
+            -w 4M \
+            -P 1 \
+            --json > "${result_dir}/result_${port}.json" 2>"${result_dir}/error_${port}.log" &
+        pids+=($!)
+        sleep 0.1  # 添加小延迟避免同时启动太多进程
+    done
+    
+    echo "等待测试完成..."
+    for pid in "${pids[@]}"; do
+        wait $pid
+    done
+    
+    echo "处理测试结果..."
+    local total_bits=0
+    local total_bytes=0
+    local failed_tests=0
+    
+    for ((port=START_PORT; port<START_PORT+num_processes; port++)); do
+        local result_file="${result_dir}/result_${port}.json"
+        local error_file="${result_dir}/error_${port}.log"
+        
+        if [ -f "$result_file" ]; then
+            if jq empty "$result_file" 2>/dev/null; then
+                local bits=$(jq -r '.end.sum_received.bits_per_second' "$result_file")
+                local bytes=$(jq -r '.end.sum_received.bytes' "$result_file")
+                
+                if [ "$bits" != "null" ] && [ "$bytes" != "null" ]; then
+                    total_bits=$(echo "$total_bits + $bits" | bc)
+                    total_bytes=$(echo "$total_bytes + $bytes" | bc)
+                else
+                    failed_tests=$((failed_tests + 1))
+                    echo "警告: port $port 结果无效"
+                    cat "$error_file"
+                fi
+            else
+                failed_tests=$((failed_tests + 1))
+                echo "警告: port $port JSON解析失败"
+                cat "$error_file"
+            fi
+        else
+            failed_tests=$((failed_tests + 1))
+            echo "警告: port $port 结果文件不存在"
+            [ -f "$error_file" ] && cat "$error_file"
+        fi
+    done
+    
+    if [ $failed_tests -eq 0 ]; then
+        local total_mbits=$(echo "scale=2; $total_bits / 1000000" | bc)
+        echo "$total_mbits" > "test_results/${test_name}_${packet_size}_throughput.txt"
+        
+        echo -e "${GREEN}测试结果:${NC}"
+        echo "总带宽: ${total_mbits} Mbits/sec"
+        
+        if [ "$packet_size" = "$PPS_PACKET" ]; then
+            local packet_overhead=42  # Ethernet(14) + IP(20) + UDP(8)
+            local total_packet_size=$((packet_size + packet_overhead))
+            local total_packets=$((total_bytes / total_packet_size))
+            local pps=$(echo "scale=2; $total_packets / $TEST_DURATION" | bc)
+            
+            echo "PPS: ${pps} 包/秒"
+            echo "$pps" > "test_results/${test_name}_${packet_size}_pps.txt"
+        fi
+    else
+        echo -e "${RED}错误: $failed_tests 个测试结果无效${NC}"
+        return 1
+    fi
+    
+    echo "收集CPU统计..."
+    ssh -q ${SSH_USER}@${SERVER_IP} "
+        mpstat 1 $TEST_DURATION | awk '
+            /%idle/ {for(i=1;i<=NF;i++) if(\$i==\"%idle\") idle_col=i}
+            !/Linux|CPU|^$/ {
+                if (\$idle_col != \"\") {
+                    cpu_usage = 100-\$idle_col
+                    printf \"%.2f\\n\", cpu_usage
+                }
+            }
+        ' > ${XDP_PATH}/test_results/${test_name}_cpu_stats.txt
+    "
+    
+    echo "清理测试环境..."
+    ssh -q ${SSH_USER}@${SERVER_IP} "pkill -9 iperf3" 2>/dev/null || true
+    sleep 1
+    
+    echo -e "${GREEN}测试完成${NC}"
+    return 0
+}
+
+
+# 收集诊断信息
+collect_diagnostics() {
+    echo -e "${BLUE}[*] 收集诊断信息...${NC}"
+    
+    ssh ${SSH_USER}@${SERVER_IP} "
+        {
+            echo '=== 网卡统计 ==='
+            ethtool -S eth0
+            
+            echo -e '\n=== 中断统计 ==='
+            cat /proc/interrupts | grep eth0
+            
+            echo -e '\n=== 网络队列状态 ==='
+            for q in /sys/class/net/eth0/queues/rx-*/rps_cpus; do
+                echo \"Queue \$(basename \$(dirname \$q))\"
+                cat \$q
+            done
+            
+            echo -e '\n=== CPU亲和性配置 ==='
+            for irq in \$(grep eth0 /proc/interrupts | awk '{print \$1}' | tr -d ':'); do
+                echo \"IRQ \$irq: \$(cat /proc/irq/\$irq/smp_affinity)\"
+            done
+            
+            echo -e '\n=== 网络统计 ==='
+            netstat -s
+            
+            echo -e '\n=== 系统负载 ==='
+            uptime
+            
+            echo -e '\n=== CPU信息 ==='
+            lscpu
+            mpstat -P ALL 1 1
+            
+            echo -e '\n=== XDP状态 ==='
+            ${BPFTOOL} net show dev eth0
+            
+            echo -e '\n=== 内存状态 ==='
+            free -m
+            
+            echo -e '\n=== 进程状态 ==='
+            ps aux | grep iperf3
+            
+            echo -e '\n=== 网卡配置 ==='
+            ethtool -l eth0
+            ethtool -g eth0
+            ethtool -k eth0
+        } > ${XDP_PATH}/test_results/diagnostics.txt
+    "
+    
+    scp ${SSH_USER}@${SERVER_IP}:${XDP_PATH}/test_results/diagnostics.txt test_results/
+}
+
+# 获取CPU统计数据
+fetch_cpu_stats() {
+    echo -e "${BLUE}[*] 获取CPU统计数据...${NC}"
+    
+    # 确保本地目录存在
+    mkdir -p test_results
+    
+    # 添加白名单场景
+    for scenario in "no_xdp" "with_xdp" "with_xdp_blacklist" "with_xdp_whitelist"; do
+        # 复制CPU统计文件
+        scp -q ${SSH_USER}@${SERVER_IP}:${XDP_PATH}/test_results/${scenario}_cpu_stats.txt \
+            test_results/ 2>/dev/null || echo "0 0" > "test_results/${scenario}_cpu_stats.txt"
+        
+        # 验证文件内容
+        if [ ! -s "test_results/${scenario}_cpu_stats.txt" ]; then
+            echo "0 0" > "test_results/${scenario}_cpu_stats.txt"
+        fi
+        
+        # 验证数据格式
+        if ! awk '{if(NF!=2 || $1!~/^[0-9.]+$/ || $2!~/^[0-9.]+$/){exit 1}}' \
+            "test_results/${scenario}_cpu_stats.txt"; then
+            echo "0 0" > "test_results/${scenario}_cpu_stats.txt"
+        fi
+    done
+}
+
+# 生成测试报告
+generate_report() {
+    echo -e "\n${GREEN}================ 性能测试综合报告 =================${NC}"
+    echo "测试时间: $(date)"
+    echo "服务器IP: $SERVER_IP"
+    echo "测试持续时间: $TEST_DURATION 秒"
+    
+    fetch_cpu_stats
+    
+    echo -e "\n${BLUE}测试结果：${NC}"
+    echo "-------------------------------------------------------------------------------------"
+    printf "%-15s %-15s %-15s %-15s %-15s %-15s\n" \
+        "测试场景" "小包(Mbps)" "大包(Mbps)" "PPS(包/秒)" "平均CPU%" "最大CPU%"
+    echo "-------------------------------------------------------------------------------------"
+    
+    # 修改这里的循环，添加白名单场景
+    for scenario in "no_xdp" "with_xdp" "with_xdp_blacklist" "with_xdp_whitelist"; do
+        # 读取测试结果
+        local small_throughput=$(cat "test_results/${scenario}_${SMALL_PACKET}_throughput.txt" 2>/dev/null || echo "N/A")
+        local large_throughput=$(cat "test_results/${scenario}_${LARGE_PACKET}_throughput.txt" 2>/dev/null || echo "N/A")
+        local pps=$(cat "test_results/${scenario}_${PPS_PACKET}_pps.txt" 2>/dev/null || echo "N/A")
+        
+        # 读取CPU统计
+        local cpu_avg="N/A"
+        local cpu_max="N/A"
+        if [ -f "test_results/${scenario}_cpu_stats.txt" ]; then
+            read cpu_avg cpu_max < "test_results/${scenario}_cpu_stats.txt"
+        fi
+        
+        # 设置场景名称
+        case $scenario in
+            "no_xdp")
+                name="无XDP"
+                ;;
+            "with_xdp")
+                name="启用XDP"
+                ;;
+            "with_xdp_blacklist")
+                name="XDP+黑名单"
+                ;;
+            "with_xdp_whitelist")
+                name="XDP+白名单"
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        
+        # 格式化输出
+        printf "%-15s %-15s %-15s %-15s %-15s %-15s\n" \
+            "$name" \
+            "${small_throughput:-N/A}" \
+            "${large_throughput:-N/A}" \
+            "${pps:-N/A}" \
+            "${cpu_avg:-N/A}" \
+            "${cpu_max:-N/A}"
+    done
+    
+    echo -e "\n${BLUE}测试说明：${NC}"
+    echo "1. 小包大小：$SMALL_PACKET bytes"
+    echo "2. 大包大小：$LARGE_PACKET bytes"
+    echo "3. PPS测试包大小：$PPS_PACKET bytes"
+    echo "4. 每个场景测试时间：$TEST_DURATION 秒"
+    echo "5. 吞吐量单位：Mbps (Megabits per second)"
+    echo "6. PPS单位：包/秒 (Packets per second)"
+    echo "7. CPU使用率显示系统整体CPU使用情况"
+    
+    echo -e "\n${BLUE}网络信息：${NC}"
+    local local_speed=$(ethtool eth0 2>/dev/null | grep "Speed:" | awk '{print $2}')
+    local server_speed=$(ssh ${SSH_USER}@${SERVER_IP} "ethtool eth0 2>/dev/null | grep Speed: | awk '{print \$2}'")
+    echo "本机网卡速率: ${local_speed:-未知}"
+    echo "服务器网卡速率: ${server_speed:-未知}"
+    
+    echo -e "\n${GREEN}================================================${NC}"
+}
+analyze_results() {
+    local test_name=$1
+    local packet_size=$2
+    
+    # 检查结果文件是否存在
+    local result_dir="test_results/${test_name}_${packet_size}"
+    if [ ! -d "$result_dir" ]; then
+        echo -e "${RED}错误: 未找到测试结果目录${NC}"
+        return 1
+    fi
+    
+    # 分析结果
+    local total_bits=0
+    local total_bytes=0
+    local success=true
+    
+    for result_file in "${result_dir}"/result_*.json; do
+        if [ -f "$result_file" ]; then
+            if ! jq empty "$result_file" 2>/dev/null; then
+                success=false
+                continue
+            fi
+            
+            local bits=$(jq -r '.end.sum_received.bits_per_second' "$result_file")
+            local bytes=$(jq -r '.end.sum_received.bytes' "$result_file")
+            
+            if [ "$bits" != "null" ] && [ "$bytes" != "null" ]; then
+                total_bits=$(echo "$total_bits + $bits" | bc)
+                total_bytes=$(echo "$total_bytes + $bytes" | bc)
+            else
+                success=false
+            fi
+        fi
+    done
+    
+    if [ "$success" = true ]; then
+        local total_mbits=$(echo "scale=2; $total_bits / 1000000" | bc)
+        echo "$total_mbits" > "test_results/${test_name}_${packet_size}_throughput.txt"
+        
+        if [ "$packet_size" = "$PPS_PACKET" ]; then
+            local packet_overhead=42
+            local total_packet_size=$((packet_size + packet_overhead))
+            local total_packets=$((total_bytes / total_packet_size))
+            local pps=$(echo "scale=2; $total_packets / $TEST_DURATION" | bc)
+            echo "$pps" > "test_results/${test_name}_${packet_size}_pps.txt"
+        fi
+    fi
+}
+
+# 主测试流程
+main() {
+    local selected_stages=""
+    
+    # 解析命令行参数
+    while getopts "s:t:p:h" opt; do
+        case $opt in
+            s)
+                selected_stages=$OPTARG
+                ;;
+            t)
+                THREADS=$OPTARG
+                ;;
+            p)
+                START_PORT=$OPTARG
+                ;;
+            h)
+                show_usage
+                exit 0
+                ;;
+            \?)
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    # 如果没有指定阶段，运行所有阶段
+    if [ -z "$selected_stages" ]; then
+        selected_stages=$(seq -s, 1 ${#STAGES[@]})
+    fi
+    
+    # 验证选择的阶段
+    if ! validate_stages "$selected_stages"; then
+        exit 1
+    fi
+    
+    echo -e "${GREEN}[+] XDP性能测试工具${NC}"
+    echo -e "${BLUE}选择的测试阶段:${NC}"
+    for stage in $(echo "$selected_stages" | tr ',' ' '); do
+        echo "$stage. ${STAGES[$((stage-1))]}"
+    done
+    echo
+    
+    # 执行选择的阶段
+    for stage in $(echo "$selected_stages" | tr ',' ' '); do
+        case $stage in
+            1)  # 环境准备
+                echo -e "\n${GREEN}=== 阶段1: 环境准备 ===${NC}"
+                echo "服务器IP: $SERVER_IP"
+                echo -e "${BLUE}[1/4] 检查基础连接...${NC}"
+                
+                if ! ping -c 1 -W 2 $SERVER_IP >/dev/null 2>&1; then
+                    echo -e "${RED}错误: 无法连接到服务器 $SERVER_IP${NC}"
+                    exit 1
+                fi
+                
+                echo -e "${BLUE}[2/4] 检查SSH连接...${NC}"
+                if ! ssh -q -o BatchMode=yes -o ConnectTimeout=5 ${SSH_USER}@${SERVER_IP} "echo OK" >/dev/null 2>&1; then
+                    echo -e "${RED}错误: SSH连接失败${NC}"
+                    echo "请确保已配置SSH免密登录:"
+                    echo "ssh-copy-id ${SSH_USER}@${SERVER_IP}"
+                    exit 1
+                fi
+                
+                echo -e "${BLUE}[3/4] 准备测试环境...${NC}"
+                install_local_dependencies
+                setup_local
+                setup_server
+                
+                echo -e "${BLUE}[4/4] 检查网络状态...${NC}"
+                check_network
+                ;;
+                
+            2)  # 无XDP基准测试
+                echo -e "\n${GREEN}=== 阶段2: 无XDP基准测试 ===${NC}"
+                echo -e "${BLUE}[1/3] 执行PPS测试...${NC}"
+                xdp_operations "unload"
+                run_test "no_xdp" $PPS_PACKET "无XDP配置 - PPS测试"
+                analyze_results "no_xdp" $PPS_PACKET
+
+                echo -e "${BLUE}[2/3] 执行小包测试...${NC}"
+                run_test "no_xdp" $SMALL_PACKET "无XDP配置 - 小包测试"
+                analyze_results "no_xdp" $SMALL_PACKET
+
+                echo -e "${BLUE}[3/3] 执行大包测试...${NC}"
+                run_test "no_xdp" $LARGE_PACKET "无XDP配置 - 大包测试"
+                analyze_results "no_xdp" $LARGE_PACKET
+                ;;
+                
+            3)  # 启用XDP测试
+                echo -e "\n${GREEN}=== 阶段3: 启用XDP测试 ===${NC}"
+                echo -e "${BLUE}[1/3] 执行PPS测试...${NC}"
+                xdp_operations "load"
+                run_test "with_xdp" $PPS_PACKET "启用XDP - PPS测试"
+                analyze_results "with_xdp" $PPS_PACKET
+
+                echo -e "${BLUE}[2/3] 执行小包测试...${NC}"
+                run_test "with_xdp" $SMALL_PACKET "启用XDP - 小包测试"
+                analyze_results "with_xdp" $SMALL_PACKET
+
+                echo -e "${BLUE}[3/3] 执行大包测试...${NC}"
+                run_test "with_xdp" $LARGE_PACKET "启用XDP - 大包测试"
+                analyze_results "with_xdp" $LARGE_PACKET
+                ;;
+                        
+            4)  # XDP+黑名单测试
+                echo -e "\n${GREEN}=== 阶段4: XDP+黑名单测试 ===${NC}"
+                
+                # 首先确保XDP程序已加载
+                echo -e "${BLUE}[1/5] 检查并加载XDP程序...${NC}"
+                xdp_operations "load"
+                
+                # 验证XDP程序是否正确加载
+                if ! ssh ${SSH_USER}@${SERVER_IP} "${BPFTOOL} net show dev eth0 | grep -q xdp"; then
+                    echo -e "${RED}错误: XDP程序未正确加载${NC}"
+                    exit 1
+                fi
+                
+                echo -e "${BLUE}[2/5] 配置黑名单...${NC}"
+                manage_blacklist "add"
+
+                echo -e "${BLUE}[3/5] 执行PPS测试...${NC}"
+                run_test "with_xdp_blacklist" $PPS_PACKET "启用XDP并添加黑名单 - PPS测试"
+                analyze_results "with_xdp_blacklist" $PPS_PACKET
+
+                echo -e "${BLUE}[4/5] 执行小包测试...${NC}"
+                run_test "with_xdp_blacklist" $SMALL_PACKET "启用XDP并添加黑名单 - 小包测试"
+                analyze_results "with_xdp_blacklist" $SMALL_PACKET
+
+                echo -e "${BLUE}[5/5] 执行大包测试...${NC}"
+                run_test "with_xdp_blacklist" $LARGE_PACKET "启用XDP并添加黑名单 - 大包测试"
+                analyze_results "with_xdp_blacklist" $LARGE_PACKET
+                ;;
+                
+            5)  # XDP+白名单测试
+                echo -e "\n${GREEN}=== 阶段5: XDP+白名单测试 ===${NC}"
+                
+                # 首先确保XDP程序已加载
+                echo -e "${BLUE}[1/5] 检查并加载XDP程序...${NC}"
+                xdp_operations "load"
+                
+                # 验证XDP程序是否正确加载
+                if ! ssh ${SSH_USER}@${SERVER_IP} "${BPFTOOL} net show dev eth0 | grep -q xdp"; then
+                    echo -e "${RED}错误: XDP程序未正确加载${NC}"
+                    exit 1
+                fi
+                
+                echo -e "${BLUE}[2/5] 配置白名单...${NC}"
+                manage_whitelist "add"
+
+                echo -e "${BLUE}[3/5] 执行PPS测试...${NC}"
+                run_test "with_xdp_whitelist" $PPS_PACKET "启用XDP并添加白名单 - PPS测试"
+                analyze_results "with_xdp_whitelist" $PPS_PACKET
+
+                echo -e "${BLUE}[4/5] 执行小包测试...${NC}"
+                run_test "with_xdp_whitelist" $SMALL_PACKET "启用XDP并添加白名单 - 小包测试"
+                analyze_results "with_xdp_whitelist" $SMALL_PACKET
+
+                echo -e "${BLUE}[5/5] 执行大包测试...${NC}"
+                run_test "with_xdp_whitelist" $LARGE_PACKET "启用XDP并添加白名单 - 大包测试"
+                analyze_results "with_xdp_whitelist" $LARGE_PACKET
+                ;;
+
+            6)  # 收尾工作
+                echo -e "\n${GREEN}=== 阶段5: 收尾工作 ===${NC}"
+                echo -e "${BLUE}[1/4] 收集诊断信息...${NC}"
+                collect_diagnostics
+                
+                echo -e "${BLUE}[2/4] 清理黑名单...${NC}"
+                manage_blacklist "clear"
+                
+                echo -e "${BLUE}[3/4] 卸载XDP程序...${NC}"
+                xdp_operations "unload"
+                
+                echo -e "${BLUE}[4/4] 生成最终报告...${NC}"
+                generate_report
+                ;;
+        esac
+    done
+
+    echo -e "\n${GREEN}[+] 测试完成!${NC}"
+}
+
+# 运行主程序（末尾）
+main "$@"

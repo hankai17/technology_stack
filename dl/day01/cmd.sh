@@ -16,3 +16,11 @@ conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
 #conda create --name d2l python=3.9 -y
 #conda activate d2l
+
+
+
+
+#conda create -n d2l_tf python=3.9 -y
+#conda activate d2l_tf
+#conda install matplotlib numpy pandas jupyter -y
+#pip install d2l==1.0.3 tensorflow==2.12.0
