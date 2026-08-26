@@ -34,7 +34,7 @@ def load_user_cmd(filename):    # 读取用户命令历史，每 100 条命令�
                 i = 0
     # 统计所有命令的频率，取最高频 50 和最低频 50 作为特征参考集
     # Python 3 中 dict.keys() 返回视图，需用 list() 转换才能切片
-    fdist = list(FreqDist(dist).keys())
+    fdist = list(FreqDist(dist).keys()) # FreqDist()先统计每个命令出现的次数 # .keys() 取出的是不重复的命令字符串——也就是去重后的词表 # 且按频率排序
     dist_max = set(fdist[0:50])
     dist_min = set(fdist[-50:])
     return cmd_list, dist_max, dist_min
