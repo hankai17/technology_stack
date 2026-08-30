@@ -19,9 +19,20 @@ import joblib
 import numpy as np
 import matplotlib.pyplot as plt
 from hmmlearn import hmm
+from sklearn import svm
+from sklearn import metrics
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 
 # 处理域名的最小长度：太短的样本信息量不够，直接跳过
 MIN_LEN = 10
+
+# 随机种子，保证 SVM 验证部分的结果可复现
+SEED = 0
+
+# J2 特征里"前 k 个最相似的正常域名"的 k
+TOPK = 10
 
 # HMM 的隐藏状态个数。可以理解为"把域名字符分成 8 类角色"，
 # 比如辅音簇、元音、数字串等，模型自己去学这 8 类分别是什么
@@ -272,8 +283,169 @@ def show_jarccard_index():
     plt.show()
 
 
+# ---------------------------------------------------------------------------
+# 上面 4 个 show_* 只是画散点图看分布，没有任何"能拦下多少"的量化结论。
+# 下面是 Jaccard 的"完整版"：把距离构造成特征向量，用 SVM 做有监督分类并验证。
+# ---------------------------------------------------------------------------
+
+
+def bigrams(domain):
+    # 把域名切成相邻字符对(bigram)的集合，首尾各补一个空格做边界标记
+    #   "ab.com" -> {' ', 'a', 'ab', 'bc', 'c.', '.o', 'om', 'm '}
+    # 注意首部 ' ' + domain[0] 会同时加入空格和首字符两个单字符元素
+    s = set(' ' + domain[0])
+    for i in range(len(domain) - 1):
+        s.add(domain[i] + domain[i + 1])
+    s.add(domain[-1] + ' ')
+    return s
+
+
+def jaccard_dist(a, b):
+    # Jaccard 距离 = |A - B| / |A ∪ B|，值越大越不像
+    # (Jaccard 相似度才是 |A ∩ B| / |A ∪ B|，两者互补)
+    return len(a - b) / len(a | b)
+
+
+def feat_full(bg, ref_bg):
+    # J1：完整距离向量，维度 = 参考集大小
+    # 把"这个域名跟每个正常域名的差异"直接当成特征
+    return np.array([jaccard_dist(bg, r) for r in ref_bg])
+
+
+def feat_stats(bg, ref_bg):
+    # J2：距离分布的统计量，低维且可解释
+    d = np.array([jaccard_dist(bg, r) for r in ref_bg])
+    k = min(TOPK, len(d))
+    nearest = np.sort(d)[:k]
+    return np.array([d.min(), d.mean(), np.median(d),
+                     nearest.mean(), nearest.std(), d.max()])
+
+
+def feat_mean(bg, ref_bg):
+    # J3：只有平均距离，就是上面 show_jarccard_index() 画散点图用的那个量
+    return np.array([np.mean([jaccard_dist(bg, r) for r in ref_bg])])
+
+
+# 三种特征化方式：(显示名, 提取函数)
+FEATURES = [
+    ('J1 完整距离向量(679维)', feat_full),
+    ('J2 距离统计量(6维)', feat_stats),
+    ('J3 仅平均距离(1维)', feat_mean),
+]
+
+
+def build_feature(domains, ref_bg, fn):
+    # 对一批域名算特征。参考集的 bigram 集合只算一次，所有域名都跟它比
+    print('  特征化 %d 条域名...' % len(domains))
+    return np.array([fn(bigrams(d), ref_bg) for d in domains])
+
+
+def make_clf():
+    # 特征是稠密的小矩阵，用 StandardScaler 即可(稀疏特征才需要 MaxAbsScaler)
+    return make_pipeline(StandardScaler(),
+                         svm.SVC(kernel='linear', C=1, random_state=SEED))
+
+
+def evaluate(name, X, y):
+    # 分层抽样划分，保证训练集和测试集的正负比例一致
+    Xtr, Xte, ytr, yte = train_test_split(
+        X, y, test_size=0.4, random_state=SEED, stratify=y)
+    pred = make_clf().fit(Xtr, ytr).predict(Xte)
+    print('%-26s acc=%.4f  prec=%.4f  rec=%.4f  f1=%.4f' % (
+        name,
+        metrics.accuracy_score(yte, pred),
+        metrics.precision_score(yte, pred, zero_division=0),
+        metrics.recall_score(yte, pred, zero_division=0),
+        metrics.f1_score(yte, pred, zero_division=0)))
+    return pred, yte
+
+
+def cross_val(name, X, y):
+    # 10 折交叉验证，看分数的波动范围(单次划分看不出稳定性)
+    cv = StratifiedKFold(10, shuffle=True, random_state=SEED)
+    f1 = cross_val_score(make_clf(), X, y, cv=cv, scoring='f1', n_jobs=-1)
+    print('%-26s f1 = %.4f ± %.4f' % (name, f1.mean(), f1.std()))
+
+
+def show_cm(y_true, y_pred, title):
+    cm = metrics.confusion_matrix(y_true, y_pred)
+    print('  混淆矩阵(%s)' % title)
+    print('                预测正常  预测DGA')
+    print('    真实正常   %7d %8d' % (cm[0][0], cm[0][1]))
+    print('    真实DGA    %7d %8d' % (cm[1][0], cm[1][1]))
+
+
+def verify_jarccard_svm():
+    # 用 Jaccard 特征向量 + SVM 验证检测效果
+    #
+    # 关键设定：参考集用 alexa 训练集(top-1000.csv)，
+    # 被分类的正常域名用 alexa 测试集(test-top-1000.csv)，两者不重叠。
+    # 如果参考集里就包含待分类的域名，等于"自己跟自己比"，分数会虚高。
+    alexa_train = load_alexa("../data/top-1000.csv")
+    alexa_test = load_alexa("../data/test-top-1000.csv")
+    crypto = load_dga("../data/dga-cryptolocke-1000.txt")
+    goz = load_dga("../data/dga-post-tovar-goz-1000.txt")
+
+    print('样本数: 参考集(alexa训练) %d, alexa测试 %d, cryptolocker %d, goz %d'
+          % (len(alexa_train), len(alexa_test), len(crypto), len(goz)))
+    print()
+
+    ref_bg = [bigrams(d) for d in alexa_train]
+    print('参考集 bigram 集合构建完成(%d 条)\n' % len(ref_bg))
+
+    # ---------- 场景一：两族 DGA 混合，随机划分 ----------
+    print('=' * 70)
+    print('场景一：两族 DGA 混合，随机划分 train/test (DGA=1, 正常=0)')
+    print('=' * 70)
+    domains = alexa_test + crypto + goz
+    y = np.array([0] * len(alexa_test) + [1] * (len(crypto) + len(goz)))
+
+    F = {name: build_feature(domains, ref_bg, fn) for name, fn in FEATURES}
+    print()
+    for name, _ in FEATURES:
+        evaluate(name, F[name], y)
+    print()
+    for name, _ in FEATURES:
+        cross_val(name, F[name], y)
+    print()
+
+    best = 'J1 完整距离向量(679维)'
+    pred, yte = evaluate('>>> 详细结果(%s)' % best, F[best], y)
+    show_cm(yte, pred, best)
+    print()
+
+    # ---------- 场景二：跨家族泛化 ----------
+    # 真实场景：手上只有已知家族的样本，要检测一个从没见过的新家族
+    print('=' * 70)
+    print('场景二：跨家族泛化 —— cryptolocker 训练，检测没见过的 goz')
+    print('=' * 70)
+    tr_domains = alexa_train + crypto
+    te_domains = alexa_test + goz
+    ytr = np.array([0] * len(alexa_train) + [1] * len(crypto))
+    yte2 = np.array([0] * len(alexa_test) + [1] * len(goz))
+
+    G = {name: (build_feature(tr_domains, ref_bg, fn),
+                build_feature(te_domains, ref_bg, fn))
+         for name, fn in FEATURES}
+    print()
+    for name, (Xtr, Xte) in G.items():
+        pred2 = make_clf().fit(Xtr, ytr).predict(Xte)
+        print('%-26s acc=%.4f  prec=%.4f  rec=%.4f  f1=%.4f' % (
+            name,
+            metrics.accuracy_score(yte2, pred2),
+            metrics.precision_score(yte2, pred2, zero_division=0),
+            metrics.recall_score(yte2, pred2, zero_division=0),
+            metrics.f1_score(yte2, pred2, zero_division=0)))
+        show_cm(yte2, pred2, name)
+        print()
+
+
 if __name__ == '__main__':
+    # 可视化（需要图形界面）
     # show_hmm()
     # show_aeiou()
     # show_uniq_char_num()
-    show_jarccard_index()
+    # show_jarccard_index()
+
+    # Jaccard 特征向量 + SVM 验证（纯命令行，不需要图形界面）
+    verify_jarccard_svm()
