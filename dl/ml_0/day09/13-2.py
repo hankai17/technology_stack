@@ -26,6 +26,13 @@ nodes = {}
 # 自增的节点编号
 index = 1
 
+# 数据结构（未实测：需本地 Neo4j 服务端，本环境无数据库；以下为按代码推演的结构）：
+#   nodes : dict[str, str]   ← 见过的 URL -> 分配的节点变量名（形如 "Page12"）
+#       同一个 URL 第二次出现时查 nodes[url] 命中，不会重复建节点
+#   index : int              ← 下一个待分配的 Page 编号（从 1 自增）
+#   每条日志行解析后：path(起点 referer 的 url)、ref(终点页面的 url)，均为 str
+#   建图结果：每个 URL 一个 Page 节点（属性 url/id/in/out），path->ref 之间一条 IN 有向边
+
 driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
 session = driver.session()
 

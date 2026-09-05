@@ -25,6 +25,13 @@ transactions = [[1, 2, 5],
                 [1, 2, 3, 5],
                 [1, 2, 3]]
 
+# 数据结构（实测）：
+#   transactions : list[list[int]], 长度 9    ← 9 条事务，每条是若干项的列表
+#   patterns : dict                            ← key=tuple(项集)，value=int(出现次数)
+#       示例: {(1,): 6, (2,): 7, (3,): 7, (5,): 4}（find_frequent_patterns(transactions, 2) 阈值=绝对次数 2）
+#   rules : dict                             ← key=tuple(前件)，value=(tuple(后件), 置信度 float)；以前件为 key，每个前件只留最长后件那条
+#       示例: {(1,): ((3,), 1.0)} 表示 {1} --> {3} conf 1.0
+
 # 第二个参数是支持度阈值。
 # 注意：pyfpgrowth 这里要的是"绝对出现次数"，不是 Apriori 里的比例！
 #   find_frequent_patterns(transactions, 2) 表示至少出现 2 次(2/9 ≈ 0.22)

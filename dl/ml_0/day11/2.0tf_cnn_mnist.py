@@ -41,6 +41,20 @@ testX = testX.reshape([-1, 28, 28, 1])
 X, mean = du.featurewise_zero_center(X)
 testX = du.featurewise_zero_center(testX, mean)
 
+# 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+#   X, Y    : mnist.load_data(one_hot=True) 返回 X=(55000, 784)、Y=(55000, 10) one-hot、
+#             testX=(10000, 784)、testY=(10000, 10)
+#   X       : reshape 后 (55000, 28, 28, 1) float ← 灰度图，通道=1；zero-center 后每像素减训练集均值
+#   testX   : (10000, 28, 28, 1)
+#   mean    : ndarray, shape=(784,) float ← 训练集逐像素均值（测试集用同一均值，避免数据泄漏）
+#   网络张量形状（静态推导，ResNet 残差结构）：
+#     input_data      : (None, 28, 28, 1)
+#     conv_2d         : (None, 28, 28, 64)     ← 64 个 3×3 卷积核（bias=False，因后面有 BN）
+#     residual_bottleneck ×5 : 经 5 组瓶颈块，2 次 downsample（第 2、4 组），分辨率 28→14→7、通道 64→128→256
+#                            末尾特征图 (None, 7, 7, 256)
+#     global_avg_pool : (None, 256)            ← 每通道整张图取平均，参数量为 0
+#     fully_connected : (None, 10)             ← 10 类 softmax
+
 # Building Residual Network
 net = tflearn.input_data(shape=[None, 28, 28, 1])
 # 第一个卷积：64 个 3×3 卷积核

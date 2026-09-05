@@ -19,6 +19,14 @@ iplist = {}
 # 访问域名数达到 R 的 IP 才算"有效样本"（域名太少说明是误抓或扫描器）
 goodiplist = {}
 
+# 数据结构（实测，data/etl-ip-domain-train.txt，约 40000 行）：
+#   iplist     : dict[str, dict]   ← 1842 个 IP，每个 IP 映射到它访问过的域名集合（值占位 1）
+#       key 形如 "49.83.26.24*"（IP 已脱敏，见 13-4.py）；value 是 {domain: 1, ...}
+#   goodiplist : dict[str, int]    ← 825 个 IP（访问域名数 >= R=2 的有效 IP），值占位 1
+#   G          : nx.Graph          ← IP 为节点；两 IP 域名集合 Jaccard >= N=0.5 时连一条边(带 weight)
+#       实测 G: 577 个节点、137102 条边、10 个连通分量
+#       Subgraph 0 是 546 节点的巨型连通块（传递效应粘成的，并非真团伙）
+
 # 相似度阈值：Jaccard >= N 才连边
 N = 0.5
 # 报告团伙的最少 IP 数
@@ -84,6 +92,12 @@ n_sub_graphs = nx.number_connected_components(G)
 #   G.subgraph(节点集合)   -> 子图视图
 #   .copy()                -> 转成独立副本，否则子图视图会跟着原图变
 sub_graphs = [G.subgraph(c).copy() for c in nx.connected_components(G)]
+
+# 数据结构（各连通子图，实测）：
+#   sub_graphs : list[nx.Graph]   ← 每个元素是从 G 切出的一个连通分量副本，长度 = 连通分量数(10)
+#       仅报告节点数 >= M=3 的子图：Subgraph 0=546 节点、Subgraph 1=10 节点(51.255.65.*)、
+#       Subgraph 5=4 节点、Subgraph 9=5 节点
+#   sub_graph.nodes() : 节点视图，元素是 IP 字符串（如 "49.83.26.24*"）
 
 for i, sub_graph in enumerate(sub_graphs):
     n_nodes = len(sub_graph.nodes())

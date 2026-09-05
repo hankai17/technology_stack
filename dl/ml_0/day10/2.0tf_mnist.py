@@ -86,6 +86,16 @@ y = tf.nn.softmax(tf.matmul(x,W) + b)   # softmax：把得分转为概率，每�
 # y_ 是真实标签的占位符
 y_ = tf.placeholder("float", [None,10])
 
+# 数据结构（未实测：本机无 tensorflow / TF1 不支持 Python 3.12，以下为按代码静态推导的张量形状）：
+#   x        : placeholder, shape=(None, 784)   ← None=运行时定的 batch 大小；每行 28×28 像素(已归一化 0~1)
+#   W        : Variable, shape=(784, 10)        ← 输入→输出的权重（本例全 0 初始化）
+#   b        : Variable, shape=(10,)            ← 输出偏置
+#   y        : Tensor,    shape=(None, 10)      ← softmax 概率，每行 10 类概率和为 1；y[i][j]≈P(第 i 张图是数字 j)
+#   y_       : placeholder, shape=(None, 10)    ← one-hot 真实标签
+#   training : 元组 (X, y)，X=(50000, 784) float、y=(50000,) int（load_data 取到的训练集）
+#   test     : x1=(10000, 784)、y1=(10000, 10) one-hot
+#   一个 batch: batch_xs=(100, 784)、batch_ys=(100, 10)（batch_size=100，1 个 epoch 共 500 个 batch）
+
 # 交叉熵损失：-sum(y_ * log(y))
 # 因为 y_ 是 one-hot，只有正确类别那一项留下，其余乘 0 消掉
 # 手写这个式子数值上不稳定：y 里有 0 时 log(0) = -inf，

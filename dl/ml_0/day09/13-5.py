@@ -18,6 +18,16 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 
+# 数据结构（各 show 建出的图，节点=实体 str、边=共现关系；实测 show3 的尺寸）：
+#   通用模式: G = nx.Graph()；G.add_edge(实体A, 实体B) 自动建节点；节点名带前缀如
+#       "u1"(用户) "1.1.1.1"(IP) "uid=mike" "ip=ip1" "tel=tel1" "hid=1" "app=app1" "action=buy"
+#   helloWord: 3 节点(u1, u2, 1.1.1.1)、2 条边（两用户共用一个 IP）
+#   show1    : 读 sample1.txt(uid,ip,tel,activesyncid)，以 uid 为中心挂 ip/tel/设备
+#   show2    : 读 sample2.txt(uid,ip,login,ua)
+#   show3    : 读 sample3(hid,uid,app)+sample4(hid,uid,action) → 9 节点、10 条边
+#             节点示例 ['hid=1','uid=mike','app=app1','hid=2','uid=tony','uid=john']
+#   所有 show 最后 nx.draw(G, with_labels=True) 画图；节点/边规模取决于输入数据行数
+
 def helloWord():
     # 最小示例：两个用户共用一个 IP
     # 这就是"共用资源 -> 可疑关联"的最基本形态

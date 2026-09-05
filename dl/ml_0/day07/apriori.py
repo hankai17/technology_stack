@@ -94,6 +94,14 @@ def apriori(dataSet, minSupport=0.5):								# 总事务数 = 4，最小支持�
     # 是个静默出错的坑。原书是 Python 2 写法(map 直接返回 list)，所以没暴露。
     D = list(map(set, dataSet))
     L1, suppData = scanD(D, C1, minSupport)
+
+    # 数据结构（关键变量，实测玩具数据 dataSet=4 条事务）：
+    #   dataSet : list[list]，每个元素是一条事务（"购物篮"），元素是各项(标量或 str)
+    #   C1      : list[frozenset]，长度 = 全部不重复的单项的个数（候选 1-项集）
+    #   D       : list[set]，与 dataSet 同长，每条事务转成 set，供 issubset 判断包含
+    #   L       : list[list[frozenset]]   ← 所有频繁项集，L[0]=1-项集, L[1]=2-项集... 直到某层为空为止
+    #   suppData: dict                    ← key=frozenset(项集)，value=float(支持度)；含频繁和不频繁的候选
+    #   返回: L(频繁项集列表), suppData(支持度字典)
     # L 存所有频繁项集：L[0] 是 1-项集，L[1] 是 2-项集，以此类推
     L = [L1]
     k = 2
@@ -143,6 +151,11 @@ def rulesFromConseq(freqSet, H, supportData, brl, minConf=0.7):
 def generateRules(L, supportData, minConf=0.7):
     # 从所有频繁项集生成关联规则
     bigRuleList = []
+
+    # 数据结构（generateRules 的返回）：
+    #   bigRuleList : list[(frozenset前件, frozenset后件, float置信度)]
+    #       每条规则形如 (frozenset({1}), frozenset({3}), 1.0) 表示 {1} --> {3} conf 1.0
+    #   实测玩具数据(minSupport=0.5, minConf=0.7)返回 5 条规则
     # 从 i=1 开始：1-项集(单个元素)推不出任何规则，至少要 2-项集
     for i in range(1, len(L)):
         for freqSet in L[i]:

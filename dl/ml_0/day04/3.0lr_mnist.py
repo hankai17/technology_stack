@@ -32,6 +32,17 @@ if __name__ == '__main__':
     logreg = linear_model.LogisticRegression(C=1e5)
     # 在训练集上学 10 组 (w_c, b_c)
     logreg.fit(x1, y1)
+    # 数据结构（拟合后，实测）：
+    #   logreg.coef_     -> np.ndarray shape (10, 784)，dtype float64
+    #       （10 个类别 × 784 个像素，每列是"该像素对判为这个数字的贡献权重"；正=亮像素更倾向该数字）
+    #   logreg.intercept_ -> np.ndarray shape (10,)，实测：
+    #       [-1.2227  1.4312  0.0602 -0.6027  0.3102  2.1386 -0.6866  1.6052 -2.3841 -0.6494]
+    #   logreg.predict_proba(x2) -> np.ndarray shape (10000, 10)，每行 10 个概率和为 1
+    #       实测前 2 行（第 1 条被以 99.8% 判为类 7，第 2 条以 99.7% 判为类 2，与真实标签 7、2 一致）：
+    #         [[3.2e-07 8.0e-14 1.9e-06 2.1e-03 6.9e-08 4.1e-06 2.2e-12 9.98e-01 3.9e-06 2.4e-04]
+    #          [1.1e-04 1.1e-06 9.97e-01 8.4e-04 4.1e-16 7.0e-04 1.1e-03 1.4e-19 1.8e-04 2.9e-15]]
+    #   logreg.predict(x2)[:10]  = [7 2 1 0 4 1 4 9 6 9]，真实 y2[:10] = [7 2 1 0 4 1 4 9 5 9]
+    #   predict 等于取 predict_proba 每行最大概率的下标 argmax
     # 和 4.1nb_mnist.py 一样沿用原书写法：直接拿测试集做默认 5 折交叉验证，评分标准为 accuracy
     # （规范做法是训练集里再切一份做验证，测试集只在最后用一次）
     print(cross_val_score(logreg, x2, y2, scoring="accuracy"))

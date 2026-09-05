@@ -81,6 +81,15 @@ if __name__ == '__main__':
     #   也就是丢掉了调用顺序，只统计每个编号出现了几次(所以捕捉不到时序模式)
     #   注意：CountVectorizer 默认 token_pattern 要求 token 至少 2 个字符，
     #   因此 0~9 这些单位数编号会被直接丢掉，只有 10 以上的编号才进词表
+    # 数据结构（实测）：
+    #   x1 -> list[str]，833 条正常样本，每条是一行系统调用编号
+    #       实测第 0 条前 90 字符：'7 142 142 7 6 5 54 140 197 221 174 11 45 221 221 221 33 33 192 33 5 197 192 6 33 5 3 197 1'
+    #   x2 -> list[str]，124 条 Java_Meterpreter 攻击样本
+    #   x  = x1 + x2 -> 实测 957 条；y -> 实测 957，分布 Counter({0: 833, 1: 124})
+    #   词袋后 x(shape 样本数, 词表大小) -> scipy.sparse.csr_matrix, shape (957, 143), dtype int64
+    #       （词表大小只有 143，因为单位数编号被默认正则剔除了；'7' in 词表? False，'10' in 词表? True）
+    #       get_feature_names_out() 前 10 项：['142','54','140','197','221','174','11','45','33','192']
+    #       每条样本是 143 维的稀疏计数向量（正常轨迹里只出现少数几个编号）
     vectorizer = CountVectorizer(min_df=1)                  # 词袋丢掉了调用顺序，只统计每个编号出现几次 # 按理说攻击的系统调用应该是顺序的 有规律的
     x = vectorizer.fit_transform(x)
     # 保持稀疏矩阵：MaxAbsScaler 和 LogisticRegression 都能直接吃稀疏输入，
@@ -102,6 +111,11 @@ if __name__ == '__main__':
         MaxAbsScaler(),
         linear_model.LogisticRegression(C=1e5, max_iter=1000),
     )
+    # 数据结构（拟合后，实测，二分类下 sklearn 用 one-vs-rest，只留 (n_classes-1) 组系数）：
+    #   coef_   -> np.ndarray shape (1, 143)   # 143 个特征各自的权重（正=更倾向判为攻击）
+    #   intercept_ -> np.ndarray shape (1,), 实测 [-2.3672023]
+    #   predict_proba(x) -> np.ndarray shape (957, 2)，每行 [判为正常概率, 判为攻击概率]，和为 1
+    #   predict(x)[:10] 实测 = [0 0 0 0 0 0 0 0 0 0]
 
     score = cross_val_score(logreg, x, y, n_jobs=-1, cv=10)
     print(np.mean(score))

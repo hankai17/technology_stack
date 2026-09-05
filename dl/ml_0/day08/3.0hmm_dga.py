@@ -48,6 +48,8 @@ def load_alexa(filename):
 
 def domain2ver(domain):
     # 域名 -> HMM 观测序列，每个字符取 ASCII 码，形状 (len(domain), 1)
+    # 数据结构（实测）：返回值 list[list[int]]，转 np.array 后 shape=(len(domain), 1), dtype=int64
+    #   示例 domain2ver("google.com") → 10 行，前 6 个值 = [103, 111, 111, 103, 108, 101]
     ver = []
     for i in range(0, len(domain)):
         ver.append([ord(domain[i])])
@@ -71,6 +73,15 @@ def train_hmm(domain_list):
     remodel = hmm.GaussianHMM(n_components=N, covariance_type="full", n_iter=100)
     remodel.fit(X, X_lens)
     joblib.dump(remodel, FILE_MODEL)
+
+    # 数据结构（train_hmm 输入与模型，实测）：
+    #   X       : np.ndarray, shape=(总观测点数, 1), dtype=int64  ← 所有域名字符 ASCII 码纵向拼接
+    #       alexa 训练集(过滤 MIN_LEN 后 679 个域名) 实测 mini-train(50 域名)=605 个观测点
+    #   X_lens  : list[int], 长度 = 域名个数 + 1                  ← 每条序列长度，sum(X_lens) == len(X)
+    #   训练后模型参数（N=8，观测为 1 维）：
+    #     startprob_ : shape=(8,)      transmat_ : shape=(8, 8)
+    #     means_     : shape=(8, 1)    covars_   : shape=(8, 1, 1)
+    #   test_dga()/test_alexa() 返回 (x, y)：x=各域名长度 list[int]，y=各域名对数似然 list[float]（越高越像正常域名）
 
     return remodel
 

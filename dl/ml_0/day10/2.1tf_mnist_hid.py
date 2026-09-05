@@ -79,6 +79,19 @@ b1=tf.Variable(tf.zeros([h1_units]))       # 偏置可以放心的全 0
 W2=tf.Variable(tf.zeros([h1_units,10]))
 b2=tf.Variable(tf.zeros([10]))
 
+# 数据结构（未实测：本机无 tensorflow / TF1 不支持 Python 3.12，以下为按代码静态推导的张量形状）：
+#   x           : placeholder, shape=(None, 784)        ← 输入 batch
+#   keep_prob   : placeholder, shape=() 标量            ← dropout 保留概率（训练 0.75 / 测试 1.0）
+#   W1          : Variable, shape=(784, 300)            ← 输入→隐藏层权重（truncated_normal 初始化）
+#   b1          : Variable, shape=(300,)                ← 隐藏层偏置
+#   W2          : Variable, shape=(300, 10)             ← 隐藏→输出层权重（本例全 0 初始化，小瑕疵）
+#   b2          : Variable, shape=(10,)                 ← 输出偏置
+#   hidden1     : Tensor, shape=(None, 300)             ← ReLU 激活后的隐藏层输出
+#   hidden1_drop: Tensor, shape=(None, 300)             ← dropout 后的隐藏层（训练时按 keep_prob 随机置 0 并放大）
+#   y           : Tensor, shape=(None, 10)             ← softmax 概率
+#   y_          : placeholder, shape=(None, 10)        ← one-hot 真实标签
+#   数据同 15-1: 训练 X=(50000, 784)、测试 x1=(10000, 784)；一个 batch=(100, 784)
+
 x = tf.placeholder(tf.float32, [None, in_units])
 # keep_prob 是"神经元保留概率"的占位符：
 # 训练时喂 0.75（随机丢掉 25%），测试时喂 1.0（不丢，全部神经元参与）

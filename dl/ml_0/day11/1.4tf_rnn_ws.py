@@ -117,6 +117,22 @@ def do_rnn(trainX, testX, trainY, testY):
     # 补齐到 300 个编号：短的补 0、长的截掉
     trainX = pad_sequences(trainX, maxlen=max_sequences_len, value=0.)
     testX = pad_sequences(testX, maxlen=max_sequences_len, value=0.)
+    # 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+    #   x1,y1 : load_adfa_training_files 返回正常样本 x1 为"系统调用编号 list"的 list、y1 全 0
+    #           （ADFA-LD Training_Data_Master 共 833 条正常样本）
+    #   x2,y2 : load_adfa_webshell_files 用正则筛出 Web_Shell 攻击样本，x2 为编号 list、y2 全 1（数量视仓库文件而定）
+    #   x     : 合并 x1+x2，每项是"一条系统调用序列"(整数 list，如 [6, 6, 63, 6, 42, ...])
+    #   y     : (len(x),) 的 0/1 标签
+    #   x_train/x_test : 6:4 划分后的两条序列 list；pad_sequences 后：
+    #     trainX : ndarray, shape=(len(x_train), 300) int ← 补齐/截断到 300 个系统调用编号，不足补 0
+    #     testX  : (len(x_test), 300)
+    #   max_sys_call : int，读取时统计出的系统调用最大编号（决定 Embedding 输入维度 = max_sys_call+1）
+    #   网络张量形状（静态推导）：
+    #     input_data : (None, 300)
+    #     embedding  : (None, 300, 128)  ← 输入维度 max_sys_call+1
+    #     lstm       : (None, 128)        ← dropout=0.3 表示保留 70%
+    #     softmax    : (None, 2)
+    #   y_predict : list，长度=len(x_test)，每元素 0/1（由 P(类别0) 与 0.5 比较得到）
     # Converting labels to binary vectors
     trainY = to_categorical(trainY, nb_classes=2)
     # 留下转换前的 0/1 标签，最后算 classification_report / 混淆矩阵时要用它

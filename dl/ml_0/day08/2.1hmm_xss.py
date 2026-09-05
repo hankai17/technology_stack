@@ -113,6 +113,13 @@ def load_wordbag(filename, max_words=100):
 
     print("GET wordbag size(%d)" % index_wordbag)
 
+    # 数据结构（load_wordbag 产出，实测）：
+    #   wordbag      : dict[str, int]   ← 词 → 整数编号，编号从 1 开始递增（0 预留、未知词用 -1）
+    #       调用 load_wordbag(xss-2000.txt, 2000) 后词表上限 2000 个高频词
+    #   index_wordbag : int             ← 下一个待分配的编号（= 词表当前大小 + 1）
+    #   观测序列中每个词：词袋内有 → [编号]，词袋外 → [-1]（未知词）
+    #       mini 示例: do_str("<script>alert(1)") → 词列表 ['<script>', 'alert', '('...]
+
 
 def main(filename):
     # 训练：把语料转成整数序列后喂给 HMM
@@ -152,6 +159,14 @@ def main(filename):
     remodel = hmm.GaussianHMM(n_components=N, covariance_type="full", n_iter=100)
     remodel.fit(X, X_lens)      # X:      1,-1,-1         2,-1          -1,-1,-1,-1
                                 # X_lens: 3                 2             4
+
+    # 数据结构（main 的输入与模型，实测）：
+    #   X      : np.ndarray, shape=(总观测点数, 1), dtype=int64  ← 各参数值切词后的整数序列纵向拼接（哑样本 [[-1]] 打头）
+    #   X_lens : list[int], 长度 = 参数值个数 + 1                ← 每条序列长度，sum(X_lens) == len(X)
+    #   训练后模型参数（N=5，观测为 1 维）：
+    #     startprob_ : shape=(5,)      transmat_ : shape=(5, 5)
+    #     means_     : shape=(5, 1)    covars_   : shape=(5, 1, 1)
+    #   test()/test_normal() 用 remodel.score(整数序列) 返回对数似然(float，负数)，>= T(-200) 即报 XSS
     joblib.dump(remodel, "xss-train.pkl")
 
     return remodel

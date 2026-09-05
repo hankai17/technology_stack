@@ -37,6 +37,18 @@ import tflearn.datasets.mnist as mnist
 # metrics 这个导入本文件其实没用到，按原样保留
 X, Y, testX, testY = mnist.load_data(one_hot=True)
 
+# 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+#   X     : ndarray, shape=(55000, 784) float   ← MNIST 训练图，每行 28×28 像素(已归一化 0~1)
+#   Y     : ndarray, shape=(55000, 10) int(0/1) ← one-hot 标签，Y[i] 是 10 维 one-hot，正确类别位为 1
+#   testX : ndarray, shape=(10000, 784) float   ← 测试图
+#   testY : ndarray, shape=(10000, 10) int       ← 测试 one-hot 标签
+#   do_rnn 内 reshape 后：X/testX 由 (n,784) → (n,28,28)，即"28 个时间步、每步 28 维"的序列
+#   do_rnn 网络张量形状（静态推导）：
+#     input_data : (None, 28, 28)   ← None=运行时定的 batch 大小
+#     lstm_1     : (None, 28, 128)  ← 第一层 LSTM return_seq=True，输出每个时间步的隐藏状态
+#     lstm_2     : (None, 128)      ← 第二层 LSTM，仅取最后一个时间步
+#     softmax    : (None, 10)       ← 10 类概率，每行和为 1
+
 def do_DNN(X, Y, testX, testY):
     # Building deep neural network
     # input_data 是 tflearn 的入口层，shape=[None, 784] 的 None 表示 batch 大小不定

@@ -59,6 +59,16 @@ model.covars_ = covars
 # 想让每次跑出来的图一样，可以传 random_state=0
 X, Z = model.sample(500)
 
+# 数据结构（本例三要素与采样结果，实测）：
+#   模型参数（手写赋值的 np.ndarray）：
+#     startprob_ : np.ndarray, shape=(4,)        ← 初始状态概率，和为 1
+#     transmat_  : np.ndarray, shape=(4, 4)      ← 状态转移矩阵，每行和为 1
+#     means_     : np.ndarray, shape=(4, 2)      ← 4 个状态各自的高斯均值（二维圆心）
+#     covars_    : np.ndarray, shape=(4, 2, 2)   ← 4 个状态的完整协方差矩阵
+#   采样输出：
+#     X : np.ndarray, shape=(500, 2), dtype=float   ← 500 个观测点（二维坐标序列）
+#     Z : np.ndarray, shape=(500,), dtype=int64     ← 每一步由哪个隐藏状态生成（0~3），画图可按 c=Z 着色
+
 # 按采样顺序把点连起来，能看出状态之间跳转的轨迹
 plt.plot(X[:, 0], X[:, 1], ".-", label="observations", ms=6,
          mfc="orange", alpha=0.7)

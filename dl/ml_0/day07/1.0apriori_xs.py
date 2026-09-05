@@ -53,6 +53,16 @@ if __name__ == '__main__':
 
     print('事务数: %d' % len(myDat))
 
+    # 数据结构（实测）：
+    #   myDat : list[list[str]], 长度 2000            ← 2000 条事务（每条 = 一个 URL 的查询串切出的 token 列表）
+    #       示例 myDat[0] = ['onmouseover', 'prompt', '42873', 'bad']
+    #       平均每条事务约 14.9 个 token（分隔符 SEP 切出来的"商品"）
+    #   L     : list[list[frozenset]], 共 5 层          ← 各阶频繁项集
+    #       L[0]=1-项集(10个)  L[1]=2-项集(11个)  L[2]=3-项集(4个)  L[3]=4-项集(1个)  L[4]=5-项集(0个)
+    #   suppData : dict, 834 项                       ← key=frozenset(项集)，value=float(支持度比例)
+    #   rules : list[(frozenset前件, frozenset后件, float置信度)], 37 条   ← 满足 minConf=0.6 的关联规则
+    #       minSupport=0.15（项集至少出现在 15% 事务里）
+
     # minSupport=0.15：token 至少出现在 15% 的样本里才算频繁
     L, suppData = apriori(myDat, 0.15)
     for i, Lk in enumerate(L):

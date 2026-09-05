@@ -325,6 +325,20 @@ if __name__ == "__main__":
     print("get_features_by_tf")
     x,y=get_features_by_tf()
     x_train, x_test, y_train, y_test = train_test_split(x, y, test_size = 0.4, random_state = 0)
+    # 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+    #   get_features_by_tf() 返回：
+    #     x : ndarray, shape=(n, 1024) int ← n 为 enron 邮件总数；每封邮件截断/补齐到 1024 个词 id
+    #         （min_frequency=0 表示出现过的词都收，词表很大）；实际数据路径 ../data/mail/enron%d/ 与本仓库不符
+    #         （应为 ../data/enron1/，且只有 enron1），本机取不到数据，此处形状为按代码静态推导
+    #     y : (n,) 的 0/1 标签（ham=0, spam=1）
+    #   x_train/x_test : 6:4 划分，random_state=0；do_rnn_wordbag 内 pad 到 1024，形状 (len(x_train),1024)/(len(x_test),1024)
+    #   网络张量形状（静态推导，本文件末尾实际只调用 do_rnn_wordbag 的 LSTM）：
+    #     input_data : (None, 1024)
+    #     embedding  : (None, 1024, 128)  ← 注意 input_dim 写死 10240000，参数量不现实（应改 n_words+1）
+    #     lstm       : (None, 128)
+    #     softmax    : (None, 2)
+    #   另 do_cnn_wordbag（本文件未调用）为同构 TextCNN：
+    #     input(1024)→embed(1000000,128)→三路卷积(3/4/5)→merge(591,128)→global_max_pool→(None,2)
     #CNN
     #do_cnn_wordbag(x_train, x_test, y_train, y_test)
 

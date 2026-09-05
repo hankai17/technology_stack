@@ -393,6 +393,11 @@ def verify_jarccard_svm():
     ref_bg = [bigrams(d) for d in alexa_train]
     print('参考集 bigram 集合构建完成(%d 条)\n' % len(ref_bg))
 
+    # 数据结构（参考集，实测）：
+    #   ref_bg : list[set], 长度 679  ← alexa 训练集每个域名的字符 bigram 集合（首尾补空格做边界）
+    #            一个集合示例: bigrams("ab.com") = {' ', 'a', 'ab', 'bc', 'c.', '.o', 'om', 'm '}
+    #            它的长度 = 下面 J1 特征的维度（679）
+
     # ---------- 场景一：两族 DGA 混合，随机划分 ----------
     print('=' * 70)
     print('场景一：两族 DGA 混合，随机划分 train/test (DGA=1, 正常=0)')
@@ -402,6 +407,15 @@ def verify_jarccard_svm():
 
     F = {name: build_feature(domains, ref_bg, fn) for name, fn in FEATURES}
     print()
+
+    # 数据结构（F 里三种 Jaccard 特征矩阵，实测 shape 均为 (2882, 维度)，dtype=float64）：
+    #   J1 完整距离向量(679维) : shape=(2882, 679)  ← 每个域名到参考集 679 个正常域名各自的 Jaccard 距离
+    #       示例 J1[0][:8] = [0.52 0.5 0.4815 0.4643 0.52 0.4815 0.48 0.5417]  （值∈[0,1]，越大越不像）
+    #   J2 距离统计量(6维)     : shape=(2882, 6)    = [min, mean, median, 最近10个均值, 最近10个std, max]
+    #       示例 J2[0] = [0.25 0.4604 0.4643 0.3052 0.022 0.5909]
+    #   J3 仅平均距离(1维)     : shape=(2882, 1)    = 到参考集的平均 Jaccard 距离（show_jarccard_index 画图用的量）
+    #       示例 alexa 样本 J3=0.4604；goz 样本 J3=0.5192（DGA 平均距离更大，更像"不像正常域名"）
+    #   模型预测: pred = clf.predict(F[name]) → np.ndarray, shape=(2882,), dtype=int64
     for name, _ in FEATURES:
         evaluate(name, F[name], y)
     print()

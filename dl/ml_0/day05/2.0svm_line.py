@@ -25,6 +25,15 @@ from sklearn.model_selection import train_test_split
 x = []
 y = []
 
+# 数据结构（etl() 跑完两个文件后实测）：
+#   x : list[list[int]], 长度 151658    ← 每条样本 4 个手工特征
+#       单个元素 = [URL总长度, 是否含http(s), 危险字符数, 危险关键词数]
+#       实测示例: x[0] = [47, 0, 4, 2]；正常样本前 3 条 = [[47,0,4,2],[83,0,5,3],[71,0,6,1]]
+#               一个 XSS 样本 '<script>alert(1)...' → [56, 0, 5, 5]
+#       转成模型输入时 np.array(x) → np.ndarray, shape=(151658, 4), dtype=int64
+#   y : list[int], 长度 151658         ← 标签，1=XSS攻击 / 0=正常
+#       标签分布 Counter({1: 16151, 0: 135507})，正负比约 1:8.4（类别很不均衡）
+
 
 def get_len(url):
     # 特征1：URL 总长度。XSS 载荷通常会把 URL 撑得很长
@@ -107,6 +116,13 @@ etl('../data/good-xss-200000.txt', x, 0)
 # 没有加 stratify=y：样本量够大(6 万测试集)，随机划分的正负比例已经很接近；
 # 如果样本少或类别更不均衡，应该加上 stratify=y 做分层抽样
 x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.4, random_state=0)
+
+# 数据结构（划分后实测）：
+#   x_train : np.ndarray, shape=(90994, 4)  float→int 特征矩阵（每行一条样本，4 列特征）
+#   x_test  : np.ndarray, shape=(60664, 4)
+#   y_train : np.ndarray, shape=(90994,)     训练标签
+#   y_test  : np.ndarray, shape=(60664,)     测试标签（含 6446 条真实 XSS、54218 条正常）
+#   模型预测: y_pred = clf.predict(x_test) → np.ndarray, shape=(60664,), dtype=int64
 
 # kernel='linear' 线性核：4 维特征下够了，而且比 RBF 快很多
 # C=1 是惩罚系数，C 越大越不容忍训练集上的分错(间隔变窄、更贴合数据)

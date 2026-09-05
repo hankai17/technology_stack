@@ -158,6 +158,18 @@ def main(unused_argv):
     x_train = np.array(list(vp.transform(x_train)))
     x_test = np.array(list(vp.transform(x_test)))
     n_words=len(vp.vocabulary_)
+    # 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+    #   x,y   : load_data() 返回 x 为 2000 个影评字符串的 list、y 为 (2000,) 的 0/1 标签（pos=0, neg=1）
+    #   x_train: list 长度 1200（6:4 划分，random_state=0）、x_test: list 长度 800
+    #   y_train: (1200,) int、y_test: (800,) int
+    #   vp.transform 后（词表在**全量 x** 上 fit，min_frequency=1，词表约 4 万）：
+    #     x_train : ndarray, shape=(1200, 200) int ← 每篇影评截断/补齐到 200 个词 id，不足补 0
+    #     x_test  : (800, 200)
+    #   do_rnn 网络张量形状（静态推导）：
+    #     input_data : (None, MAX_DOCUMENT_LENGTH=200)
+    #     embedding  : (None, 200, 128)  ← 词表 n_words(≈40000) 个词 → 128 维
+    #     lstm       : (None, 128)
+    #     softmax    : (None, 2)         ← 二分类概率
     print('Total words: %d' % n_words)
 
     do_NB(x_train, x_test, y_train, y_test)

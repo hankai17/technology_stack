@@ -42,6 +42,18 @@ file_lines = open(path, "r").read()
 X, Y, char_idx = \
     string_to_semi_redundant_sequences(file_lines, seq_maxlen=maxlen, redun_step=3)
 
+# 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+#   file_lines : str，整个 wvs-pass.txt 内容（明文密码，一行一个）
+#   X     : ndarray, shape=(n, 10, len(char_idx)) int(0/1) ← 每条样本 10 个字符的 one-hot；
+#           n 为"半冗余"滑动窗口（步长 redun_step=3）切出的样本数；maxlen=10 比城市名短
+#   Y     : ndarray, shape=(n, len(char_idx)) int(0/1) ← 第 11 个字符的 one-hot（预测目标）
+#   char_idx : dict，字符→id 映射（含数字/字母/符号，字符表比城市名大）；len(char_idx)=字符表大小
+#   网络张量形状（静态推导，结构与 16-4 完全一致）：
+#     input_data : (None, 10, len(char_idx))
+#     lstm_1     : (None, 10, 512)  ← return_seq=True
+#     lstm_2     : (None, 512)
+#     softmax    : (None, len(char_idx))  ← 下一个字符的多分类
+
 # 输入是 one-hot 后的字符序列 (batch, 10, 字符表大小)
 g = tflearn.input_data(shape=[None, maxlen, len(char_idx)])
 g = tflearn.lstm(g, 512, return_seq=True)

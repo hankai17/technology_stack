@@ -87,12 +87,23 @@ if __name__ == '__main__':
     x = x1 + x2
     y = y1 + y2
 
+    # 数据结构（实测）：
+    #   x : list[str], 长度 957   ← 每个元素是一个文件的系统调用序列（空格分隔的编号字符串）
+    #       示例 x[0] = '7 142 142 7 6 5 54 140 ...'
+    #   y : list[int], 长度 957    ← 标签 {0: 833(正常), 1: 124(Java_Meterpreter 攻击)}
+
     # 词袋：把系统调用编号当成词，统计每个编号出现的次数
     # 注意 CountVectorizer 默认 token_pattern 要求 token 至少 2 个字符，
     # 所以 0~9 这些单位数编号会被直接丢掉，只有 10 以上的编号才进词表
     vectorizer = CountVectorizer(min_df=1)
     x = vectorizer.fit_transform(x)
     # 保持稀疏矩阵，缩放交给下面的 MaxAbsScaler（它支持稀疏输入）
+
+    # 数据结构（向量化后，实测）：
+    #   x : scipy.sparse.csr_matrix, shape=(957, 143), dtype=int64
+    #       ← 957 条样本 × 143 种系统调用编号（CountVectorizer 默认 token_pattern 要求 ≥2 字符，
+    #          所以只有编号 ≥10 的才进词表；每行的非零计数就是该编号出现的次数）
+    #   模型输出: cross_val_score(...) → np.ndarray, shape=(10,) 每个 fold 的 accuracy / recall
 
     # ------------------------------------------------------------------
     # 原书的配置是 MLPClassifier(hidden_layer_sizes=(150,50), max_iter=10,

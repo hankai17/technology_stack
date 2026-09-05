@@ -17,6 +17,19 @@ np.random.seed(0)
 X = np.r_[np.random.randn(20, 2) - [2, 2], np.random.randn(20, 2) + [2, 2]]
 Y = [0] * 20 + [1] * 20
 
+# 数据结构：
+#   X : np.ndarray, shape=(40, 2), dtype=float64   ← 40 个二维样本点
+#       每行 = 一个点的坐标 [x, y]；前 20 行是 0 类(围绕 (-2,-2))，后 20 行是 1 类(围绕 (+2,+2))
+#       实测示例: X[0]  = [-0.2359 -1.5998]   (0 类)
+#                 X[21] = [ 0.2937  3.9508]   (1 类)
+#   Y : list[int], 长度 40                    ← 标签，[0]*20 + [1]*20
+#       Y[:3]=[0,0,0]  Y[-3:]=[1,1,1]
+#
+#   训练后模型对象上的关键属性（fit 之后才有）：
+#   clf.support_vectors_ : np.ndarray, shape=(3, 2)   ← 3 个支持向量，二维坐标
+#   clf.coef_            : np.ndarray, shape=(1, 2)   ← 超平面法向量 w = [w0, w1]
+#   clf.intercept_       : np.ndarray, shape=(1,)     ← 偏置 b
+
 # kernel='linear' 表示不做核变换，直接在原空间里找一条直线分开两类
 # C 是惩罚系数(默认为 1.0)，C 越大越不容忍分错的点，间隔会变窄
 clf = svm.SVC(kernel='linear')

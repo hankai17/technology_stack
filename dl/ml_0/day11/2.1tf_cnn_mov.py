@@ -153,6 +153,21 @@ if __name__ == '__main__':
     x_test = np.array(list(vp.transform(x_test)))
     n_words=len(vp.vocabulary_)
     print('Total words: %d' % n_words)
+    # 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+    #   x,y   : load_data() 返回 2000 篇影评字符串的 list、y 为 (2000,) 的 0/1 标签（pos=0, neg=1）
+    #   x_train: list 长度 1200、x_test: list 长度 800（6:4 划分，random_state=0）
+    #   y_train: (1200,)、y_test: (800,)
+    #   vp.transform 后（词表在**全量 x** 上 fit，min_frequency=1，n_words≈40000）：
+    #     x_train : ndarray, shape=(1200, 200) int ← 截断/补齐到 200 个词 id
+    #     x_test  : (800, 200)
+    #   do_cnn 网络张量形状（静态推导，TextCNN 三路卷积 + 全局最大池化）：
+    #     input_data : (None, 200)
+    #     embedding  : (None, 200, 128)  ← 词表 n_words+1 → 128 维
+    #     branch1/2/3: (None, 198/197/196, 128)  ← 窗口 3/4/5，padding='valid' 不补边，长度=200-k+1
+    #     merge      : (None, 198+197+196=591, 128)  ← 时间维(axis=1)拼接
+    #     (插维后)   : (None, 591, 128, 1)            ← 给二维池化用
+    #     global_max_pool : (None, 128)               ← 每卷积核在全句最强响应
+    #     fully_connected : (None, 2)                 ← 二分类 softmax
 
     # 注意参数顺序：do_cnn(trainX, trainY, testX, testY)，
     # 和 16-3 的 do_rnn(trainX, testX, trainY, testY) 不一样，照抄会喂错数据

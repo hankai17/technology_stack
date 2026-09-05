@@ -19,6 +19,15 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 
+# 数据结构（各 show 建出的图，节点=实体 str、边=共现关系；实测尺寸）：
+#   通用模式: G = nx.Graph()；G.add_edge(实体A, 实体B) 自动建节点；节点名带前缀
+#   helloWord: 3 节点、2 边（u1/u2 共用 IP 1.1.1.1）
+#   show1/2/3: 同 13-5.py；show3 读 sample3+sample4 → 9 节点、10 边
+#   show4    : 读 sample5.txt(mail,domain,ip)，链式边 邮箱-域名-IP
+#   show5    : 读 sample6.txt(md5,domain)，文件-域名关联 → 8 节点、8 边
+#             节点示例 ['md5=file1','domain=domain1','domain=domain2','md5=file2']
+#   每个 show 最后 nx.draw(G, with_labels=True) 画图
+
 def helloWord():
     # 最小示例：两个用户共用一个 IP
     G = nx.Graph()

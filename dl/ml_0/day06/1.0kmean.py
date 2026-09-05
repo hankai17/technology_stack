@@ -28,6 +28,14 @@ def show_kmeans():
     # 返回的 y 是真实簇标签，但 KMeans 是无监督的，不会用到它
     X, y = make_blobs(n_samples=n_samples, random_state=random_state)
 
+    # 数据结构（实测）：
+    #   X : np.ndarray, shape=(1500, 2), dtype=float64   ← 1500 个二维平面点（每行为一个 [x, y] 坐标）
+    #       示例 X[:2] = [[-5.198, 0.642], [-5.752, 0.419]]
+    #   y : np.ndarray, shape=(1500,), dtype=int64      ← 真实簇标签 {0,1,2}（3 团）。
+    #       KMeans 是无监督的，不读这个标签，它仅用于"我们知道数据本该有几团"
+    #   聚类后: y_pred = KMeans(n_clusters=3).fit_predict(X) → np.ndarray, shape=(1500,), 取值 {0,1,2}
+    #       （簇编号是任意的，和数字大小无关，只表示"被分到同一组"）
+
     # n_clusters=3 指定要分成 3 簇；fit_predict 等价于先 fit 再取 labels_
     y_pred = KMeans(n_clusters=3, random_state=random_state).fit_predict(X)
 

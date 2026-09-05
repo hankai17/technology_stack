@@ -67,6 +67,15 @@ def load_SpamBase(filename):
     print(x_test.shape)
     return x_train, x_test, y_train, y_test
 
+    # 数据结构（DNN 部分未实测：本机无 tensorflow；spambase 维度为静态推导，GaussianNB 部分可运行）：
+    #   x : np.ndarray, shape=(4601, 57), dtype=float64  ← 4601 封邮件、前 57 列是连续特征（词频/字符频/大写长度等）
+    #   y : np.ndarray, shape=(4601,), dtype=int64      ← 标签 0/1（1=垃圾邮件）
+    #   x_train : (2760, 57)   x_test : (1841, 57)        ← 6:4 划分（random_state=0）
+    #   y_train : (2760,)      y_test : (1841,)
+    #   DNNClassifier(hidden_units=[30, 10], n_classes=2)：
+    #     隐藏层1 权重 (57, 30)、隐藏层2 权重 (30, 10)、输出 (10, 2)
+    #   y_predict = classifier.predict(x_test) → list，长度 1841，每个元素是类别 id(0/1)
+
 
 
 def main(unused_argv):

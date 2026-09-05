@@ -166,6 +166,15 @@ def main(unused_argv):
     n_words=len(vp.vocabulary_)
     print('Total words: %d' % n_words)
 
+    # 数据结构（DNN 部分未实测：本机无 tensorflow；以下维度按代码静态推导）：
+    #   x        : list[str], 长度 2000   ← 每篇影评读成一个字符串（pos 1000 篇标签 0 / neg 1000 篇标签 1）
+    #   x_train  : np.ndarray, shape=(1200, 50), dtype=int64  ← 6:4 划分后，每篇转成长度 50 的词 id 序列(不足补 0)
+    #   x_test   : np.ndarray, shape=(800, 50),  dtype=int64   ← 复用训练集词表 transform
+    #   y_train  : np.ndarray, shape=(1200,)   y_test: shape=(800,)  ← 标签 0/1
+    #   n_words  : int  词表大小（min_frequency=1 时约 4 万；原文注释 estimate）
+    #   DNNClassifier(hidden_units=[500, 10], n_classes=2)：
+    #     输入 50 维 → 隐藏层1(500) → 隐藏层2(10) → 输出(2)；y_predict 长度 800 的类别 id
+
     # ---- baseline：高斯朴素贝叶斯 ----
     # 这里喂进去的是"词的 id 序列"，把它当连续数值用是没什么道理的
     # （id 的大小顺序没有语义），所以 NB 的结果基本只当对照，别指望它好

@@ -16,6 +16,15 @@ def load_file(file_path):
     return t
 
 
+# 数据结构: load_file() -> str
+#   把一个 PHP 文件的全部内容（去掉换行）拼成一个长字符串
+#   实测 webshell 第 0 个文件的前 200 字符：
+#   "<?php unset($jkhy,$jk_uid); $jk_uid='3802'; $jkhy=array(); $jkhy[3802]='fexin'; ?>"
+#   实测 wordpress 第 0 个文件的前 200 字符：
+#   "<?php/** * WordPress Administration Template Header * * @package WordPress * @subpackage
+#    Administration */@header('Content-Type: ' . get_option('html_type') . '; charset=' . get_option('blog_charset')"
+
+
 def load_files(path):
     files_list = []
     for r, d, files in os.walk(path):
@@ -27,6 +36,11 @@ def load_files(path):
                 t = load_file(file_path)
                 files_list.append(t)
     return files_list
+
+# 数据结构: load_files() -> list[str]
+#   实测：load_files("../data/PHP-WEBSHELL/xiaoma/") 返回 57 条（57 个 .php 文件）
+#        load_files("../data/wordpress/")        返回 100 条
+#   每条是一个 PHP 文件的完整文本（见 load_file 的样例）
 
 
 if __name__ == '__main__':
@@ -41,6 +55,14 @@ if __name__ == '__main__':
                                                                             #   ['eval', '_POST', 'cmd', 'assert', 'a']     # 缺陷：webshell 大量依赖`$`、`@`，这套正则会丢失很多关键符号特征
                                         min_df=1)
     webshell_files_list = load_files("../data/PHP-WEBSHELL/xiaoma/")
+    # 数据结构: x1 -> np.ndarray, shape (57, 13507), dtype int64
+    #   行 = 一个 webshell 文件，列 = 词表里的一个 bigram（两个连续 token 拼成），值 = 出现次数
+    #   实测词表大小 13507（57 个文件里出现过的不同 bigram 数）
+    #   实测词表前 10 项（bigram 字符串 -> 列号），全部来自第 0 个文件的开头那句 PHP：
+    #     {'php unset':8997, 'unset jkhy':11386, 'jkhy jk_uid':6507, 'jk_uid jk_uid':6501,
+    #      'jk_uid 3802':6500, '3802 jkhy':691, 'jkhy array':6506, 'array jkhy':2359,
+    #      'jkhy 3802':6505, '3802 fexin':690}
+    #   实测第 0 条样本只有 10 个非零列（13507 维里几乎全是 0）—— 极稀疏
     x1 = webshell_bigram_vectorizer.fit_transform(webshell_files_list).toarray()    # eg: vocabulary 词表是 `{"eval _POST":0, "assert base64_decode":1}`
                                                                                     #   - 文件 1：`eval _POST`出现 2 次，`assert base64_decode`出现 1 次
                                                                                     #   - 文件 2：`eval _POST`出现 0 次，`assert base64_decode`出现 3 次
@@ -59,13 +81,20 @@ if __name__ == '__main__':
                                                                             #   如果切出来的 ngram 在你给的`vocabulary`字典里面 → 统计计数，放到对应列
                                                                             #   如果切出来的 ngram**不在 vocabulary 字典 key 里 → 直接扔掉，完全忽略，不会新增一列**。
     wp_files_list = load_files("../data/wordpress/")
+    # 数据结构: x2 -> np.ndarray, shape (100, 13507), dtype int64
+    #   列数与 x1 完全一致（因为复用了同一个 vocabulary），这样才能和 x1 上下拼接
+    #   注意：wordpress 文件里出现的 bigram 如果不在 webshell 词表里，会被直接丢弃，
+    #        所以 x2 里编码的仍然是"webshell 语言风格"的对照信息
     x2 = wp_bigram_vectorizer.fit_transform(wp_files_list).toarray()
     y2 = [0] * len(x2)
 
+    # 数据结构: x -> np.ndarray, shape (157, 13507)（57 行 webshell + 100 行 wordpress）
+    #           y -> np.ndarray, shape (157,)，实测 sum(y) = 57（前 57 个是 1，后 100 个是 0）
     x = np.concatenate((x1, x2))
     y = np.concatenate((y1, y2))
 
     clf = GaussianNB()
+    # 数据结构: cross_val_score(...) -> np.ndarray, shape (3,)，3 折每折一个准确率
     print(cross_val_score(clf, x, y, n_jobs=-1, cv=3))
 
 # 泛化能力一般

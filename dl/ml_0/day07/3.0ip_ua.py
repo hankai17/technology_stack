@@ -25,6 +25,15 @@ with open("../data/KnowledgeGraph/sample7.txt") as f:
         print("Add (%s %s %s)" % (ip, ua, target))
         transactions.append([ip, ua, target])
 
+    # 数据结构（实测）：
+    #   transactions : list[list[str]], 长度 12   ← 12 条日志，每条 = [ip, ua, target] 三个带前缀的字段
+    #       示例 transactions[0] = ['ip=ip1', 'ua=ua1', 'target=url1']
+    #       注：字段名带着 ip=/ua=/target= 前缀，直接当"商品"名用
+    #   patterns : dict                            ← key=tuple(项集)，value=int(出现次数)；阈值 3=至少共现 3 次
+    #       示例: {('ua=ua1',): 6, ('target=url1',): 3, ('target=url1','ua=ua1'): 3}（本例共 5 项）
+    #   rules : dict                             ← key=tuple(前件)，value=(tuple(后件), 置信度)；阈值 0.9，本例只 1 条
+    #       示例: {('target=url1',): (('ua=ua1',), 1.0)}
+
 # 支持度阈值 3 = 至少在 3 条日志里一起出现过（这份数据一共 12 条）
 patterns = pyfpgrowth.find_frequent_patterns(transactions, 3)
 # 置信度阈值 0.9，要求关联非常强才输出

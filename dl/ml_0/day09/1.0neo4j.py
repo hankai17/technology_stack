@@ -46,6 +46,15 @@ data = [["Jim", "Mike"], ["Jim", "Billy"], ["Anna", "Jim"],
         ["Anna", "Mike"], ["Sally", "Anna"], ["Joe", "Sally"],
         ["Joe", "Bob"], ["Bob", "Sally"]]
 
+# 数据结构（未实测：需本地 Neo4j 服务端，本环境无数据库；以下为按代码推演的结构）：
+#   data : list[list[str]], 长度 8   ← 8 条 (起点, 终点) 的 KNOWS 关系，元素是 Person 名字
+#       示例 data[0] = ["Jim", "Mike"]
+#   建图后 : 8 个 Person 节点 + 8 条无向 KNOWS 边（MERGE 幂等，重复跑不增节点）
+#   查询结果（session.run 返回的对象，逐条 record 读）：
+#     foaf_query 结果 : 可迭代的 record 序列，每条 record["name"] 是 str（二度人脉名字）
+#     common_friends : record["friend"] 是 str（共同好友名字）
+#     connecting_paths: record["path"] 是 Path 对象（Joe 到 Billy 的最短路径）
+
 session.run(insert_query, parameters={"pairs": data})
 
 # ---------------------------------------------------------------- 朋友的朋友

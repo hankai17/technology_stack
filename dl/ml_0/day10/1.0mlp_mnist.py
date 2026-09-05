@@ -67,6 +67,16 @@ X, y = load_mnist()
 X_train, X_test = X[:60000], X[60000:]
 y_train, y_test = y[:60000], y[60000:]
 
+# 数据结构（实测）：
+#   X        : np.ndarray, shape=(70000, 784), dtype=float64   ← 70000 张图、每像素/255 归一化到 0~1
+#   X_train  : np.ndarray, shape=(60000, 784)                   ← 训练集（前 60000 行）
+#   X_test   : np.ndarray, shape=(10000, 784)                   ← 测试集（后 10000 行）
+#   y        : np.ndarray, shape=(70000,), dtype=int64         ← 标签 0~9
+#   模型权重（mlp.fit 之后，hidden_layer_sizes=(50,)）：
+#     mlp.coefs_    : list[np.ndarray]，[0]=W1 shape=(784, 50) 输入→隐藏，[1]=W2 shape=(50, 10) 隐藏→输出
+#     mlp.intercepts_: list[np.ndarray]，[0] shape=(50,) 隐藏偏置，[1] shape=(10,) 输出偏置
+#   预测: mlp.predict(X_test) → np.ndarray, shape=(10000,) 类别标签
+
 print('训练集 %s，测试集 %s' % (X_train.shape, X_test.shape))
 
 # MLPClassifier 各参数：

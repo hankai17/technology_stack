@@ -41,6 +41,10 @@ def domain2ver(domain):
     for i in range(0, len(domain)):
         ver.append([ord(domain[i])])
     return ver
+    # 数据结构: domain2ver() 的返回值 -> list[list[int]]，长度 = 域名字符数，每个元素是 [字符ASCII码]
+    #   实测 domain2ver('google.com')：
+    #     [[103],[111],[111],[103],[108],[101],[46],[99],[111],[109]]
+    #   对应 g o o g l e . c o m 的 ASCII（'.' = 46）。HMM 把"域名"建模成一条字符 ASCII 码序列
 
 
 def train_hmm(domain_list):
@@ -53,6 +57,19 @@ def train_hmm(domain_list):
         np_ver = np.array(ver)
         X = np.concatenate([X, np_ver])
         X_lens.append(len(np_ver))   # 记录每个域名贡献的观测长度，HMM 按长度把长序列切回单个域名
+    # 数据结构（实测，用 top-1000.csv 过滤后 679 个正常域名训练时）：
+    #   X -> np.ndarray, shape (8876, 1), dtype int64
+    #       8876 = 所有域名字符数之和 + 1（开头那个 dummy 的 0）；每行的 [ascii] 就是一个观测
+    #       前 5 行：[[0],[103],[111],[111],[103]]
+    #   X_lens -> list，长度 = 680（1 个 dummy + 679 个域名），前 5 项：[1, 10, 11, 12, 13]
+    #       第 i 项就是第 i 个域名贡献了多少个字符观测；HMM 靠 X_lens 把这一整条 X 切回"一个域名一条序列"
+    #   拟合后 remodel 内部（实测，N=8 个隐状态）：
+    #       remodel.n_features  = 1      # 观测是 1 维的 ASCII 码
+    #       remodel.n_components = 8     # 隐状态数
+    #       remodel.startprob_  -> shape (8,)    # 初始状态分布
+    #       remodel.transmat_   -> shape (8, 8)  # 状态转移概率矩阵
+    #       remodel.means_      -> shape (8, 1)  # 每个隐状态下观测 ASCII 码的均值
+    #       remodel.covars_     -> shape (8, 1)  # 协方差（covariance_type="full" 时每状态 1 维）
 
     # 训练字符级高斯 HMM：把"正常域名"建模成一条字符 ASCII 码随机过程
     remodel = hmm.GaussianHMM(n_components=N, covariance_type="full", n_iter=100)
@@ -84,6 +101,10 @@ def test_dga(remodel, filename):
         # HMM 的 score 是该域名序列在"正常域名模型"下的对数似然：
         # 正常域名分数高(接近 0)，DGA 随机域名分数更低(更负)
         pro = remodel.score(np_ver)
+        # 数据结构: test_dga/test_alexa 返回的 (x, y)
+        #   x -> list[int]，每个域名的长度（len(domain)）
+        #   y -> list[float]，每个域名经 remodel.score(np_ver) 得到的对数似然（形状，ndarray 后是 (n,)）
+        #   画图时横轴是"域名长度"，纵轴是"HMM 分数"，正常域名应整体偏高、DGA 偏低且分散
         #print("SCORE:(%d) DOMAIN:(%s) " % (pro, domain))
         x.append(len(domain))
         y.append(pro)
@@ -245,6 +266,14 @@ def nb_dga():
     x1_domain_list = load_alexa("../data/top-1000.csv")
     x2_domain_list = load_dga("../data/dga-cryptolocke-1000.txt")
     x3_domain_list = load_dga("../data/dga-post-tovar-goz-1000.txt")
+    # 数据结构: *domain_list -> list[str]，每个元素是过滤掉长度 < MIN_LEN(10) 后的一个域名
+    #   load_alexa 实测 679 条（top-1000 里够长的正常域名），前 5 个：
+    #     ['google.com', 'youtube.com', 'facebook.com', 'wikipedia.org', 'reddit.com']
+    #   load_dga(cryptolocke)   实测 1000 条，前 5 个：
+    #     ['wwkahhnyqvxdfq.com', 'kpudegrfqeuadh.net', 'xraxhxvadmpgdn.biz', 'ldjhqijygqrudp.ru', 'yfoctantsymbmt.org']
+    #   load_dga(post-tovar-goz) 实测 1000 条，前 5 个：
+    #     ['1vw732fl1xtlak0d9gcdqts1.com', '1hhxat2jy9ifweb2yvdkxcoo1.net', 'fnh1oolf37hjgasfma1p40f80.biz', '...']
+    #   注意 DGA 域名明显是"随机无语义字母串"，而 alexa 都是可读单词，这是后面能分出来的根本原因
 
     x_domain_list = np.concatenate((x1_domain_list, x2_domain_list, x3_domain_list))
 
@@ -253,6 +282,8 @@ def nb_dga():
     y3 = [2] * len(x3_domain_list)      # 银行木马僵尸网络
 
     y = np.concatenate((y1, y2, y3))
+    # 数据结构: x_domain_list -> np.ndarray, shape (2679,), dtype '<U32'（长度≤32 的 unicode 字符串）
+    #           y -> np.ndarray, shape (2679,)，分布 Counter({1: 1000, 2: 1000, 0: 679})
 
     # 字符级 bigram 特征：token_pattern=r"\w" 按单字符切，ngram_range=(2,2) 取相邻字符对
     # 例如 "abcd" -> "ab","bc","cd"；DGA 随机串的字符对分布与正常域名明显不同
@@ -262,9 +293,17 @@ def nb_dga():
             token_pattern=r"\w",        # 匹配单个字符!
             min_df=1)
     x = cv.fit_transform(x_domain_list).toarray()
+    # 数据结构: x -> np.ndarray, shape (2679, 1296), dtype int64
+    #   行 = 一个域名，列 = 词表里的一个字符 bigram，值 = 该 bigram 在域名里出现次数
+    #   实测词表大小 1296，前 10 个 bigram（空格代表域名首/尾边界）：
+    #     [('g o',600),('o o',888),('o g',880),('g l',597),('l e',770),('e c',516),
+    #      ('c o',456),('o m',886),('y o',1248),('o u',894)]
+    #   这些全是正常英文域名的常见字母衔接（如 google, youtube 里的 "go","oo","le"…）；
+    #   DGA 随机串的字符对会大不相同，所以 NB 能抓住差异，实测 3 折准确率约 0.94
 
     clf = GaussianNB()
-    print(cross_val_score(clf, x, y, n_jobs=-1, cv=3))
+    # 数据结构: cross_val_score(...) -> np.ndarray, shape (3,)
+    print(cross_val_score(clf, x, y, n_jobs=1, cv=3))
 
 
 if __name__ == '__main__':

@@ -32,6 +32,15 @@ logreg = linear_model.LogisticRegression(C=1e5)
 
 # 在 150 条样本的 2 个特征上拟合，学到的其实是 3 组 (w, b)
 logreg.fit(X, Y)
+# 数据结构（拟合后，实测）：
+#   logreg.coef_  -> np.ndarray shape (3, 2)：3 个类别 × 2 个特征的权重 w
+#       （3 分类 softmax 下每类一组 w，决定"这类相对其他类的分界面斜率"）
+#   logreg.intercept_ -> np.ndarray shape (3,)：每类的偏置 b
+#   预测时对每个点算 3 个 z_c = w_c·x + b_c，再用 softmax 归一化成概率，取最大者当类别
+#   实测 coef_ 前几列：
+#     setosa(类0)     的 w 在 sepal length 上很负、sepal width 上很负 → 和另外两类分得开
+#   注意：只用了 2 个特征，setosa 能完美分开，但 versicolor/virginica 这两类在 sepal 两维上重叠较多，
+#   所以图上会看到一片"混色"区域——这正是原书"只用前两个特征是为了可视化"的代价
 
 
 # 先把要画的范围定出来：取两个特征各自的最小/最大值，再向外扩 0.5 留点白边

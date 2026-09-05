@@ -86,6 +86,14 @@ def nb_dga():
 
     y = np.concatenate((y1, y2, y3))
 
+    # 数据结构（nb_dga，实测）：
+    #   x_domain_list : np.ndarray[str], 长度 2679 = alexa(679) + crypto(1000) + goz(1000)
+    #   y            : np.ndarray, shape=(2679,), dtype=int64   ← 3 分类标签 {0:679(正常), 1:1000(crypto), 2:1000(goz)}
+    #   x            : np.ndarray, shape=(2679, 1296), dtype=int64  ← 字符 bigram 词频矩阵（1296 种 bigram）
+    #       稀疏计数矩阵，一条样本平均只有约 8 个非零特征（大部分 bigram 在某域名里没出现）
+    #       示例某域名前 5 个非零计数: [1 1 1 1 1]
+    #   模型输出: cross_val_score(GaussianNB(), x, y, cv=3) → np.ndarray, shape=(3,) 每个折的准确率
+
     # print(x_domain_list)   # 调试用，会打出几千个域名，默认注掉了
 
     # 字符 bigram 词频向量，toarray() 转成稠密数组(GaussianNB 需要稠密输入)
@@ -117,6 +125,13 @@ def kmeans_dga():
     y3 = [1] * len(x3_domain_list)
 
     y = np.concatenate((y1, y2, y3))
+
+    # 数据结构（kmeans_dga，实测）：
+    #   x_domain_list : np.ndarray[str], 长度 158 = alexa(top-100 过滤 MIN_LEN 后剩 58) + crypto(50) + goz(50)
+    #   y            : np.ndarray, shape=(158,), dtype=int64   ← 标签 {0:58(正常), 1:100(DGA)}（仅用于对照，KMeans 不用）
+    #   x            : np.ndarray, shape=(158, 983), dtype=int64  ← 字符 bigram 词频矩阵（983 种 bigram），高维稀疏
+    #   聚类后: y_pred = KMeans(n_clusters=2).fit_predict(x) → np.ndarray, shape=(158,), 取值 {0,1}
+    #   降维后: x = TSNE().fit_transform(x) → np.ndarray, shape=(158, 2), dtype=float64  ← 只用于画图
 
     cv = CountVectorizer(ngram_range=(2, 2), decode_error="ignore",
                          token_pattern=r"\w", min_df=1)

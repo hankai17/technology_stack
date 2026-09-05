@@ -49,6 +49,15 @@ def get_apache2andNormal(x):
         w.append(v1)
     return w, y
 
+# 数据结构: get_apache2andNormal(x) 返回 (w, y)
+#   w -> list[list[float]]，实测 40041 条样本，每条 22 维（ndarray shape (40041, 22), dtype float64）
+#       22 维 = [0]duration(1) + [4:8]src/dst/land/wrong_fragment(4) + [22:30]time-based×8 + [31:40]host-based×9
+#       实测前 2 条：
+#        [0.0, 223.0, 185.0, 0.0, 0.0,   4.0,   4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 71.0, 255.0, 1.0, 0.0, 0.01, 0.01, 0.0, 0.0, 0.0]
+#        [0.0, 230.0, 260.0, 0.0, 0.0,   1.0,  19.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,  3.0, 255.0, 1.0, 0.0, 0.33, 0.07, 0.33, 0.0, 0.0]
+#   y -> list[int]，实测 40041 条，分布 Counter({0: 39247, 1: 794})
+#       正常占 98.0%、apache2 攻击只有 794 条（约 2%）—— 极度不平衡，全猜"正常"基线就有 0.98
+
 
 if __name__ == '__main__':
     v = load_kdd99("../data/kddcup99/corrected")
@@ -56,9 +65,21 @@ if __name__ == '__main__':
 
     # 高斯朴素贝叶斯：假设 22 个特征在给定类别下相互独立、且都服从高斯分布
     clf = GaussianNB()
-    # 10 折交叉验证，n_jobs=-1 用满所有 CPU 核
+    # 数据结构（拟合后，实测）：
+    #   clf.classes_         = [0 1]
+    #   clf.class_prior_     = [0.98017033 0.01982967]   # 训练集里 正常/攻击 的先验比例（≈ 98% : 2%）
+    #   clf.class_count_     = [39247.  794.]            # 每类训练样本数
+    #   clf.theta_  -> np.ndarray shape (2, 22)          # 每类、每特征的均值 μ（即"这个类下这个特征一般是多少"）
+    #   clf.var_   -> np.ndarray shape (2, 22)          # 每类、每特征的方差 σ²
+    #   clf.predict_proba(x) -> np.ndarray shape (40041, 2)，每行 [判为正常的概率, 判为攻击的概率]，和为 1
+    #     实测前 2 行都是 [1. 0.] —— 这 2 条被以 100% 判为正常
+    # 10 折交叉验证（n_jobs=1：本环境样本量大，多进程反而会因内存拷贝卡死，故用单进程）
     # 注：cross_val_score 对分类器默认用分层抽样 StratifiedKFold，类别比例在各折中保持一致
-    print(cross_val_score(clf, x, y, n_jobs=-1, cv=10))     # 默认 scoring 参数没写，默认 = `scoring="accuracy"`，也就是 10 折每折的【准确率】数组
+    # 数据结构（实测）：
+    #   accuracy 10 折： [0.99925 0.99875 0.99950 0.99950 0.99600 0.99950 0.99775 0.98901 0.99975 0.99925]，均值≈0.998
+    #   recall   10 折： [0.9875 1. 0.9873 1. 1. 0.9873 0.924 0.4625 1. 0.975]
+    #        注意第 8 折 recall 只有 0.4625：100 个攻击样本里漏判了一半多，说明 apache2 的检出并不稳
+    print(cross_val_score(clf, x, y, n_jobs=1, cv=10))     # 默认 scoring 参数没写，默认 = `scoring="accuracy"`，也就是 10 折每折的【准确率】数组
                                                             # \(accuracy=\frac{TP+TN}{TP+TN+FP+FN}\)
                                                             #- TP：攻击样本，预测为攻击（攻击预测正确）
                                                             #- TN：正常样本，预测为正常（正常预测正确）
@@ -66,7 +87,7 @@ if __name__ == '__main__':
                                                             #- FN：攻击样本，错判成正常
 
     # scoring="recall" 默认对正标签y=1计算召回率
-    scores_recall = cross_val_score(clf, x, y, n_jobs=-1, cv=10, scoring="recall")  # 二分类时：默认只计算正类 (y=1) 的召回率，不是 “总体召回率”
+    scores_recall = cross_val_score(clf, x, y, n_jobs=1, cv=10, scoring="recall")  # 二分类时：默认只计算正类 (y=1) 的召回率，不是 “总体召回率”
                                                                                     #   precision 同理只计算正类 (y=1) 的
                                                                                     #   recall_macro`分别算出 y=0 召回、y=1 召回，取算术平均
     print("每折攻击召回率：", scores_recall)

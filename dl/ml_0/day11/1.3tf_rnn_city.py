@@ -49,6 +49,18 @@ file_lines = open(path, "r").read()
 X, Y, char_idx = \
     string_to_semi_redundant_sequences(file_lines, seq_maxlen=maxlen, redun_step=3)
 
+# 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+#   file_lines : str，整个 US_Cities.txt 内容（城市名之间用换行分隔）
+#   X     : ndarray, shape=(n, 20, len(char_idx)) int(0/1) ← 每条样本 20 个字符的 one-hot；
+#           n 为"半冗余"滑动窗口（步长 redun_step=3）从语料切出的样本数
+#   Y     : ndarray, shape=(n, len(char_idx)) int(0/1) ← 第 21 个字符的 one-hot（要预测的目标）
+#   char_idx : dict，字符→id 映射（如 {'A':0, 'b':1, ...}），生成文本时靠它反查；len(char_idx)=字符表大小
+#   网络张量形状（静态推导）：
+#     input_data : (None, 20, len(char_idx))  ← 三维，最后一维是字符 one-hot
+#     lstm_1     : (None, 20, 512)            ← return_seq=True，输出每个时间步
+#     lstm_2     : (None, 512)                ← 取最后时间步
+#     softmax    : (None, len(char_idx))      ← 下一个字符的多分类
+
 # 输入层：注意是三维 (batch, 20, 字符表大小)，最后一维是 one-hot 的字符
 g = tflearn.input_data(shape=[None, maxlen, len(char_idx)])
 # 第一层 LSTM 带 return_seq=True，把每个时间步的输出都传给下一层

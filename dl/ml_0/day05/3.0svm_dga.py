@@ -170,6 +170,13 @@ if __name__ == '__main__':
     model.fit(X_hmm, lens)
     print('HMM 训练完成\n')
 
+    # 数据结构（HMM 训练输入，实测）：
+    #   X_hmm : np.ndarray, shape=(所有域名字符总数, 1), dtype=int64
+    #           每条域名的字符 ASCII 码竖向拼成一条长序列（hmmlearn 要求不等长序列先拼成大矩阵）
+    #   lens  : list[int], 长度 = len(alexa_train)+1 = 680
+    #           每条序列的长度；sum(lens) == len(X_hmm)；首元素 1 对应初始哑样本 [[0]]
+    #   N=8   : 隐藏状态数；model.predict(域名观测序列) 返回形状 (域名长度,) 的状态下标数组
+
     # ---------- 场景一：两个 DGA 家族混在一起，随机划分 ----------
     print('=' * 70)
     print('场景一：两族 DGA 混合，随机划分 train/test (DGA=1, 正常=0)')
@@ -177,11 +184,28 @@ if __name__ == '__main__':
     domains = alexa_test + crypto + goz
     y = np.array([0] * len(alexa_test) + [1] * (len(crypto) + len(goz)))
 
+    # 数据结构（场景一，实测）：
+    #   domains : list[str], 长度 2882 = alexa_test(882) + crypto(1000) + goz(1000)
+    #   y       : np.ndarray, shape=(2882,), dtype=int64   ← 0=正常 / 1=DGA
+    #             [0]*882 + [1]*2000
+
     F = {
         'A. HMM状态频次(8维)': np.array([feat_state_freq(model, d) for d in domains]),
         'B. HMM状态转移(64维)': np.array([feat_state_trans(model, d) for d in domains]),
         'C. 手工指标(3维)': np.array([feat_manual(model, d) for d in domains]),
     }
+
+    # 数据结构（F 里四种特征矩阵，实测 shape 均为 (2882, 维度)，dtype=float64）：
+    #   A. HMM状态频次(8维)  : shape=(2882, 8)   每行 8 个隐藏状态的频次占比，求和=1
+    #       示例 A[0] = [0.0833 0.0833 0.1667 0.5 0.0833 0. 0.0833 0.]
+    #   B. HMM状态转移(64维) : shape=(2882, 64)  = 8×8 状态转移矩阵拉平(行优先)，各元素∈[0,1]
+    #       示例 B[0][:8] = [0. 0. 0. 0. 0. 0. 0.0909 0.]
+    #   C. 手工指标(3维)     : shape=(2882, 3)    = [对数似然/长度, 元音占比, 唯一字符占比]
+    #       示例 alexa 样本 C[0]    = [-2.97    0.5     0.6667]
+    #            goz   样本 C[882]  = [-2.6942  0.1111  0.8333]   ← 元音少、字符更杂，更像 DGA
+    #   D. 字符bigram词袋    : scipy.sparse.csr_matrix, shape=(2882, 词表大小)
+    #       由 CountVectorizer(analyzer='char', ngram_range=(2,2)) 在训练集上 fit 后 transform 得到
+    #   模型预测: pred = clf.predict(F[name]) → np.ndarray, shape=(2882,), dtype=int64
     vec = build_bigram(alexa_train + crypto[:500])  # 词袋也只用训练集 fit
     F['D. 字符bigram词袋'] = vec.transform(domains)
 

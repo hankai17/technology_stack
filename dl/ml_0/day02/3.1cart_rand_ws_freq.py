@@ -55,22 +55,40 @@ if __name__ == '__main__':
     x1, y1 = load_adfa_training_files("../data/ADFA-LD/Training_Data_Master/")
     x2, y2 = load_adfa_hydra_ftp_files("../data/ADFA-LD/Attack_Data_Master/")
 
+    # 数据结构: x -> list[str]，实测 995 条（833 正常 + 162 Hydra_FTP 攻击）
+    #           y -> list[int]，实测 995，其中 1 有 162 个
     x = x1 + x2
     y = y1 + y2
     #print(x)
     vectorizer = CountVectorizer(min_df=1)
+
+    # 数据结构: vectorizer.fit_transform(x) -> scipy.sparse.csr_matrix, shape (995, 142)
+    #   实测词表大小 142，get_feature_names_out() 前 8 项：
+    #   ['10', '102', '104', '11', '110', '114', '117', '118']
+    #   注意这些编号是"字符串"排序（'10' < '102' < '11'），不是数值大小排序
     x = vectorizer.fit_transform(x)
+
+    # 数据结构: x.toarray() -> np.ndarray, shape (995, 142), dtype int64
+    #   实测第 0 条样本的全部非零特征（系统调用编号: 出现次数）：
+    #   [('10',1), ('11',1), ('120',41), ('122',1), ('125',8), ('140',26), ('142',134),
+    #    ('174',19), ('175',1), ('191',1), ('192',18), ('195',62), ('197',7), ('221',12), ('240',2)]
+    #   即这条正常序列里编号 '142' 出现了 134 次、'195' 出现 62 次…… 一共 15 个非零维度
     x = x.toarray()
     #print(y)
     clf1 = tree.DecisionTreeClassifier()
+
+    # 数据结构: score -> np.ndarray, shape (10,)，实测均值 0.9678686868686868（决策树）
     score = cross_val_score(clf1, x, y, n_jobs=-1, cv=10)
     print(np.mean(score))
+
     clf2 = RandomForestClassifier(n_estimators=10, max_depth=None, min_samples_split=2, random_state=0)
+    # 数据结构: score -> np.ndarray, shape (10,)，实测均值 0.9808989898989899（随机森林，比单棵树高约 1.3 个点）
     score = cross_val_score(clf2, x, y, n_jobs=-1, cv=10)
     print(np.mean(score))
 
     # 训练最终模型并绘制决策树（取代已弃用的 export_graphviz + pydotplus）
     clf1 = clf1.fit(x, y)
+    # 数据结构: 单棵决策树（实测）get_depth()=8，get_n_leaves()=35
     plt.figure(figsize=(12, 8))
     tree.plot_tree(clf1, filled=True)
     plt.savefig("./dt.pdf")
@@ -78,6 +96,15 @@ if __name__ == '__main__':
 
     # 随机森林由多棵树组成，这里画出其中第 0 棵作为示意
     clf2 = clf2.fit(x, y)
+    # 数据结构: 随机森林 clf2（RandomForestClassifier(n_estimators=10)）实测
+    #   clf2.estimators_ -> list，实测长度 10，每个元素是一棵完全独立的 DecisionTreeClassifier
+    #     10 棵树的深度： [15, 18, 15, 15, 16, 13, 18, 16, 19, 14]
+    #     10 棵树的叶子数：[52, 51, 50, 60, 58, 56, 66, 59, 61, 47]
+    #     对比单棵树（深度 8、35 个叶子）：森林里每棵树都更深更细，
+    #     因为每棵树只用了 bootstrap 抽样的约 63.2% 样本，且分裂时只看部分特征
+    #   clf2.predict(x)       -> np.ndarray, shape (995,)，元素 ∈ {0,1}
+    #   clf2.predict_proba(x) -> np.ndarray, shape (995, 2)，每行的两个数是"判为0/1的票数占比"，和为 1
+    #     与单棵树 predict_proba 常出现硬 0/1 不同，森林的概率通常比较平滑（如 0.8/0.2）
     plt.figure(figsize=(12, 8))
     tree.plot_tree(clf2.estimators_[0], filled=True)
     plt.savefig("./rf_tree0.pdf")

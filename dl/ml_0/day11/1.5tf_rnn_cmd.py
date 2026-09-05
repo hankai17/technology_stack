@@ -216,6 +216,21 @@ if __name__ == '__main__':
     x_test=user_cmd_feature[N:150]
     y_test=y[N:150]
 
+    # 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+    #   user_cmd_list : 150 个命令块，每块的 list 长度 100（每行一条命令）
+    #   dist  : 该用户出现过的全部命令集合/词表（FreqDist.keys() 返回，NLTK3 下是 dict_keys 视图）
+    #   n_words : int = len(dist)，命令词表大小（决定 one-hot 维度）
+    #   user_cmd_feature : get_user_cmd_feature_new 把每条命令做 one-hot：
+    #     shape=(150, 100, n_words) int(0/1) ← 每个命令块 = 100 个时间步，每步是命令的 one-hot 向量
+    #   y     : (150,) 的 0/1 标签：前 50 块正常(0)，第 51~150 块接 label.txt 用户 7 真实标签
+    #   x_train : user_cmd_feature[0:80]  → shape=(80, 100, n_words)；y_train=(80,)
+    #   x_test  : user_cmd_feature[80:150] → shape=(70, 100, n_words)；y_test=(70,)
+    #   网络张量形状（静态推导）：
+    #     input_data : (None, 100, n_words)  ← 100 时间步，每步是命令 one-hot
+    #     lstm_1     : (None, 100, 10)        ← return_seq=True，隐藏单元仅 10 个（刻意压低容量防过拟合）
+    #     lstm_2     : (None, 10)
+    #     softmax    : (None, 2)
+
     #print x_train
 
     do_rnn(x_train,x_test,y_train,y_test)

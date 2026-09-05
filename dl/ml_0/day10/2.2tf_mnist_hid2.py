@@ -50,6 +50,17 @@ n_classes = 10                # 输出：0~9 十个数字
 x = tf.placeholder("float",[None,784])
 y = tf.placeholder("float",[None,n_classes])
 
+# 数据结构（未实测：本机无 tensorflow / TF1 不支持 Python 3.12，以下为按代码静态推导的张量形状）：
+#   x : placeholder, shape=(None, 784)    ← 输入 batch（28×28 展开）
+#   y : placeholder, shape=(None, 10)    ← one-hot 真实标签（n_classes=10）
+#   权重字典 weigths（笔误名，原书如此）：
+#     h1  : (784, 128)   输入→隐藏层1      b1 : (128,)
+#     h2  : (128, 32)    隐藏层1→隐藏层2    b2 : (32,)
+#     out : (32, 10)     隐藏层2→输出        out: (10,)
+#   pred : Tensor, shape=(None, 10)       ← 前向输出 logits（无激活，softmax 在损失里做）
+#   mnist 数据: train(55000,784) / validation(5000,784) / test(10000,784)（one_hot=True）
+#   一个 batch=(100, 784)，1 个 epoch=550 个 batch
+
 
 def multilayer_perceptron(x,weights,biases):
     # 前向传播：全连接 -> ReLU -> 全连接 -> ReLU -> 输出层

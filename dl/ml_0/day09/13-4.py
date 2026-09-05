@@ -31,6 +31,12 @@ with open(filename) as f:
         # 域名开头 3 个"单词字符"换成 *
         domain = re.sub(r'^\w{3}', '*', domain)
 
+        # 数据结构（实测）：
+        #   输入每行  : str, 制表符分隔的 "ip\tdomain"，如 "49.83.26.24*\t*qagd.vip.wed114.cn"
+        #   脱敏后输出: 同格式 str，IP 末位变 *、域名首尾各 3 字符变 *
+        #       注: 仓库自带的 data 已是脱敏结果，再跑一遍输出与输入完全相同
+        #   ip   : str  ← 如 "49.83.26.24*"（同一 C 段的 IP 合并成一个点）
+        #   domain: str  ← 如 "*qagd.vip.wed114.cn"（抹掉子域/顶级域，只留中间部分）
         print("%s\t%s" % (ip, domain))
 
 # 注意：仓库里的 data/etl-ip-domain-train.txt 已经是脱敏之后的结果了

@@ -31,6 +31,15 @@ def show_dbscan():
     # DBSCAN 依赖距离度量，各维量纲不一致会让 eps 失去意义，所以先标准化
     X = StandardScaler().fit_transform(X)
 
+    # 数据结构（实测）：
+    #   X(原始)    : np.ndarray, shape=(750, 2), dtype=float64   ← make_blobs 造的 750 个二维点，围绕 3 个中心
+    #   X(标准化后): np.ndarray, shape=(750, 2)                  ← 均值为 0、方差为 1，eps 才有可比意义
+    #       示例 X_std[:2] = [[0.494, 1.451], [-1.428, -0.837]]
+    #   labels_true : np.ndarray, shape=(750,), dtype=int64   ← 真实簇标签，共 3 簇（仅用于评估指标，DBSCAN 本身不用）
+    #   聚类后: labels = DBSCAN(eps=0.3, min_samples=10).fit(X).labels_
+    #       np.ndarray, shape=(750,), 取值 {-1, 0, 1, 2}；-1 是噪声点
+    #       本例聚出 3 簇、噪声点 18 个；db.core_sample_indices_ 长度 679（核心点下标）
+
     db = DBSCAN(eps=0.3, min_samples=10).fit(X)
 
     # 标记哪些点是核心点，画图时把核心点画大、非核心点画小

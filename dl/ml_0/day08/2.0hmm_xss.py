@@ -102,6 +102,12 @@ def etl(s):
             vers.append([2])
     return np.array(vers)
 
+    # 数据结构（etl 输出，实测）：
+    #   返回值 : np.ndarray, shape=(len(s), 1), dtype=int64  ← 一个参数值的字符级观测序列
+    #       "字母→ASCII码；数字→统一为 1；特殊字符→ASCII码；其他→2"
+    #       示例 etl("alert(1234)") → shape=(11, 1)，前 8 个值 = [97,108,101,114,116,40,1,1]
+    #       即 a(97) l(108) e(101) r(114) t(116) ((40) 1 1(数字归一成1)
+
 
 def do_str(line):
     # 辅助函数：用 nltk 做词级分词，看 payload 会被切成什么。
@@ -155,6 +161,15 @@ def train(filename):
     remodel = hmm.GaussianHMM(n_components=N, covariance_type="full", n_iter=100)
     remodel.fit(X, X_lens)
     joblib.dump(remodel, MODEL_FILE)
+
+    # 数据结构（train 的输入与模型，实测）：
+    #   X       : np.ndarray, shape=(总观测点数, 1), dtype=int64  ← 所有参数值的观测序列纵向拼接
+    #       mini-train(401 个参数值) 实测 X.shape=(15198, 1)；全量约 (166018, 1)（见文件头实测数据）
+    #   X_lens  : list[int], 长度 = 参数值个数 + 1              ← 每条序列长度，sum(X_lens) == len(X)
+    #   训练后模型参数（N=10，观测为 1 维）：
+    #     startprob_ : shape=(10,)      transmat_ : shape=(10, 10)
+    #     means_     : shape=(10, 1)    covars_   : shape=(10, 1, 1)   ← 完整协方差，每个状态一个 1×1 方差
+    #   detect() 返回 : (hit 报警请求数, total 总请求数, n_param 被打分参数个数) 三个 int
     print('模型已保存到 %s' % MODEL_FILE)
 
     return remodel

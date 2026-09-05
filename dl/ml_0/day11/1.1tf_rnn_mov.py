@@ -68,6 +68,22 @@ testX = pad_sequences(testX, maxlen=100, value=0.)
 trainY = to_categorical(trainY, nb_classes=2)
 testY = to_categorical(testY, nb_classes=2)
 
+# 数据结构（未实测：本机无 tensorflow / tflearn，TF1 不支持 Python 3.12，以下为按代码静态推导的张量/数组形状）：
+#   train  : 元组 (trainX, trainY)，imdb.load_data 只保留词频前 10000 的词（其余映射为 OOV id）
+#   trainX : list of list，每项是一条影评的词 id 序列，长度不一（如 [1, 14, 22, ...]），pad 后变定长
+#   trainY : ndarray, shape=(N_train,) int(0/1) ← 正面/负面标签；转 one-hot 后为 (N_train, 2)
+#            （N_train≈22500，因 valid_portion=0.1 又从训练集切了 10% 当验证集，下划线变量 _ 接住未用）
+#   testX  : list of list，IMDB 固定 25000 条测试影评；pad 后 (25000, 100)
+#   testY  : (25000,)，one-hot 后 (25000, 2)
+#   pad_sequences 后：
+#     trainX : ndarray, shape=(N_train, 100) int ← 不足 100 在前补 0、超 100 截断
+#     testX  : (25000, 100)
+#   网络张量形状（静态推导）：
+#     input_data : (None, 100)        ← 定长词 id 序列
+#     embedding  : (None, 100, 128)   ← 词表 10000 词映射到 128 维稠密向量
+#     lstm       : (None, 128)         ← 取最后时间步
+#     softmax    : (None, 2)           ← 二分类概率
+
 # Network building
 # 输入是长度 100 的词 id 序列
 net = tflearn.input_data([None, 100])
