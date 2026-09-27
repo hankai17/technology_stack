@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 struct Test {
     i: i32,
-    j: Option<Arc<Mutex<i32>>>,
+    j: Option<Arc<Mutex<i32>>>,             // 四种"从 &mut self 里取东西"的姿势
     //k: Option<Weak<Mutex<i32>>>,
     l: Option<i32>,
     m: Option<HashMap<i32, i32>>,
@@ -23,25 +23,25 @@ impl Test {
         }
     }
 
-    pub fn get_j(&mut self) -> Option<Arc<Mutex<i32>>> {
+    pub fn get_j(&mut self) -> Option<Arc<Mutex<i32>>> {    //  reborrow + clone
         //match &self.j {
-        match self.j.as_mut() {             // reborrow?
-            Some(j) => Some(j.clone()),     // 关键: 没有剥离option 然后clone
+        match self.j.as_mut() {             // as_mut() 把 &mut self.j 变成 Option<&mut Arc<Mutex<i32>>>
+            Some(j) => Some(j.clone()),     // j 是 &mut Arc<...>  关键: 没有剥离option 然后clone 而是直接在 reborrow 出的 &mut Arc 上调 clone，self.j 原封不动
             None => None,
         }
-    }
+    }                                       // 返回的是 Option<Arc<...>>，一个"拥有所有权的值" 不指向 self 的任何内存。所以函数一返回，&mut self 的借用就结束了。
 
     //pub fn get_k(&mut self) -> Option<>
 
-    pub fn get_l(&mut self) -> Option<i32> {
+    pub fn get_l(&mut self) -> Option<i32> {    //  reborrow + copy
         match self.l.as_mut() {
             Some(l) => Some(*l),
             None => None,
         }
     }
 
-    pub fn get_m(&mut self) -> &mut HashMap<i32, i32> {
-        self.m.as_mut().unwrap()            // 不是take那种
+    pub fn get_m(&mut self) -> &mut HashMap<i32, i32> {     // reborrow
+        self.m.as_mut().unwrap()            // 返回的是 &mut HashMap，一个引用。它指向 self.m 内部 所以这个引用的生命周期和 &mut self 绑在一起——只要返回的引用还活着，&mut self 的借用就还在。
     }
 
     pub fn get_n(&mut self) -> &mut i32 {

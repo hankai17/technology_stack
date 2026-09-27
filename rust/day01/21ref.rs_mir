@@ -1,0 +1,211 @@
+//  rustc +nightly -Zunpretty=mir 1.rs 
+// WARNING: This output format is intended for human consumers only
+// and is subject to change without notice. Knock yourself out.
+// HINT: See also -Z dump-mir for MIR at specific points during compilation.
+//
+// ============ 阅读说明 ============
+// 本文件是 MIR 中间码，由 rustc +nightly -Zunpretty=mir 1.rs 生成。
+// 对应源码 1.rs（即 21ref.rs 中的 ref_move_reborrow，函数名改为 test）：
+//     let mut name = String::from("Charlie");
+//     let x = &mut name;
+//     let y = x;               // move：x 被永久移走，此后不可再使用
+//     say_hello(y);   say_hello(y);
+//     change_string(y); change_string(y);
+//     say_hello(y);
+// 重点看 test()：区分 move（let y = x）与 reborrow（调用点的 copy），
+// 以及 reborrow 的两种方向——借出共享引用 &(*y)、借出可变引用 copy。
+fn change_string(_1: &mut String) -> () {
+    debug s => _1;
+    let mut _0: ();
+    let _2: ();
+    let mut _3: &str;
+
+    bb0: {
+        _3 = const " Brown";
+        _2 = String::push_str(copy _1, move _3) -> [return: bb1, unwind continue];
+        // ↑ copy _1 是 reborrow：&mut String 传参时以 copy 标记，并非 move。
+    }
+
+    bb1: {
+        return;
+    }
+}
+
+alloc1 (size: 6, align: 1) {
+// ↑ " Brown"（change_string 追加的字符串常量）。
+    20 42 72 6f 77 6e                               │  Brown
+}
+
+fn say_hello(_1: &str) -> () {
+    // 本函数是 println!("Hello {}", s) 展开后的结果，与 reborrow 无关，可略过。
+    // 仅留意：宏把参数包成 std::fmt::Arguments，再调用 std::io::_print；格式串编译进 alloc2。
+    debug s => _1;
+    let mut _0: ();
+    let _2: ();
+    let mut _3: std::fmt::Arguments<'_>;
+    let _4: (&&str,);
+    let mut _5: &&str;
+    let mut _7: core::fmt::rt::Argument<'_>;
+    let mut _8: &[u8; 11];
+    let _9: &[core::fmt::rt::Argument<'_>; 1];
+    let mut _10: &&str;
+    scope 1 {
+        debug args => _4;
+        let _6: [core::fmt::rt::Argument<'_>; 1];
+        scope 2 {
+            debug args => _6;
+        }
+    }
+
+    bb0: {
+        _5 = &_1;
+        _4 = (move _5,);
+        _10 = no_retag copy (_4.0: &&str);
+        _7 = core::fmt::rt::Argument::<'_>::new_display::<&str>(copy _10) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        _6 = [move _7];
+        _8 = const b"\x06Hello \xc0\x01\n\x00";
+        _9 = &_6;
+        _3 = Arguments::<'_>::new::<11, 1>(move _8, copy _9) -> [return: bb2, unwind continue];
+    }
+
+    bb2: {
+        _2 = std::io::_print(move _3) -> [return: bb3, unwind continue];
+    }
+
+    bb3: {
+        return;
+    }
+}
+
+alloc2 (size: 11, align: 1) {
+// ↑ 格式串 "Hello {}" 的编译期二进制编码（say_hello 使用）。
+    06 48 65 6c 6c 6f 20 c0 01 0a 00                │ .Hello ....
+}
+
+fn test() -> () {
+    let mut _0: ();
+    let mut _1: std::string::String;
+    let _3: ();
+    let _4: &str;
+    let mut _5: &std::string::String;
+    let _6: ();
+    let _7: &str;
+    let mut _8: &std::string::String;
+    let _9: ();
+    let _10: ();
+    let _11: ();
+    let _12: &str;
+    let mut _13: &std::string::String;
+    scope 1 {
+        debug name => _1;
+        let _2: &mut std::string::String;
+        scope 2 {
+            debug x => _2;
+            scope 3 {
+                debug y => _2;
+                // ↑ 关键：x、y 都映射到同一个 _2，且全文没有 move _2 语句。
+                //   说明 let y = x; 是 move，但因 x 此后不再使用，move 原地复用局部 _2，
+                //   看起来像「没 move」。语义上 x 已被移走、永久失效，并非 reborrow。
+            }
+        }
+    }
+
+    bb0: {
+        _1 = <String as From<&str>>::from(const "Charlie") -> [return: bb1, unwind continue];
+        // ↑ name = String::from("Charlie")，字符串常量见 alloc3。
+    }
+
+    bb1: {
+        _2 = &mut _1;
+        // ↑ let x = &mut name
+        _5 = &(*_2);
+        // ↑ 第一次 say_hello 的 reborrow：&mut String 降级为共享 &String（类型变了，故显式写成 &(*)）。
+        _4 = <String as Deref>::deref(move _5) -> [return: bb2, unwind: bb11];
+        // ↑ deref 强转：&String → &str
+    }
+
+    bb2: {
+        _3 = say_hello(copy _4) -> [return: bb3, unwind: bb11];
+        // ↑ copy _4 拷贝的是 &str（&str 为 Copy 类型），并非 reborrow；真正的 reborrow 是上面的 &(*_2)。
+    }
+
+    bb3: {
+        // 第二次 say_hello：与第一次同构（&(*_2) 降级 → Deref::deref → say_hello(copy)）。
+        _8 = &(*_2);
+        _7 = <String as Deref>::deref(move _8) -> [return: bb4, unwind: bb11];
+    }
+
+    bb4: {
+        _6 = say_hello(copy _7) -> [return: bb5, unwind: bb11];
+    }
+
+    bb5: {
+        _9 = change_string(copy _2) -> [return: bb6, unwind: bb11];
+        // ↑ copy _2 对 &mut 而言 = reborrow（&mut 非 Copy），等价于 &mut *_2；
+        //   类型未变（仍为 &mut String），故无需新临时量，直接 copy。
+    }
+
+    bb6: {
+        _10 = change_string(copy _2) -> [return: bb7, unwind: bb11];
+        // 第二次 change_string：同上，再次 reborrow 为可变引用。
+    }
+
+    bb7: {
+        // 第三次 say_hello：与第一次同构。
+        _13 = &(*_2);
+        _12 = <String as Deref>::deref(move _13) -> [return: bb8, unwind: bb11];
+    }
+
+    bb8: {
+        _11 = say_hello(copy _12) -> [return: bb9, unwind: bb11];
+    }
+
+    bb9: {
+        drop(_1) -> [return: bb10, unwind continue];
+        // ↑ 函数正常结束时，编译器插入的析构：释放 name。
+    }
+
+    bb10: {
+        return;
+    }
+
+    bb11 (cleanup): {
+        // cleanup 块：若前面某次调用 panic，同样要 drop(_1)，再 resume 继续传播 panic。
+        drop(_1) -> [return: bb12, unwind terminate(cleanup)];
+    }
+
+    bb12 (cleanup): {
+        resume;
+    }
+}
+
+alloc3 (size: 7, align: 1) {
+// ↑ "Charlie"（test 里 name 的初始值）。
+    43 68 61 72 6c 69 65                            │ Charlie
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: ();
+
+    bb0: {
+        _1 = test() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+
+
+say_hello 的 reborrow 是 &(*_2)，它那行的 copy _4 是拷贝一个 &str；change_string 的 reborrow 才藏在 copy _2 里。两个 copy 是两码事
+
+say_hello 借出的是共享引用 &String：多个共享引用可以共存。借出期间，y 的目标处于"只读"状态——不能再通过 y 写，但可以继续读（再借几个 & 都行）。
+change_string 借出的是可变引用 &mut String：独占。借出期间，y 被完全"挂起"——读写都不能再碰 y，直到这次 reborrow 结束。
+这也解释了为什么两者的 MIR 写法不对称：
+
+借出共享引用时，类型变了（&mut String → &String），必须新开一个临时量 _5，于是写成显式的 &(*_2)；
+借出可变引用时，类型没变（还是 &mut String），不需要新临时量，直接对原引用打 copy 标记即可。

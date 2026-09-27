@@ -38,20 +38,28 @@ fn ref() {
 // Rust 编译器禁止你把未加锁的 &mut T 传到多个线程里 线程间共享变量，必须用包装类型：Mutex<T>、RwLock<T>、Arc<T> // 即编译期 避免了条件竞争
 
 
-// 共享引用在 赋值/传参时 就是简单的拷贝
-// 可变引用在 赋值/传参时 就是move
+// 本函数结合 21ref.rs_mir（rustc +nightly -Zunpretty=mir 1.rs 的 test()）逐行对照，区分 &mut 的 move 与 reborrow。
+//   1. move：裸赋值 let y = x; 将 &mut 引用整体转移给 y，x 此后不可再使用。
+//   2. reborrow：将引用作为实参传入函数、或显式写 let y = &mut *x; 时仅发生重借用；
+//      借用区间在最后一次使用处结束（NLL 非词法生命周期），原引用随后恢复可用。
+// reborrow 按借出方向分两种，MIR 表达不同：
+//   · 借出共享引用（&mut T → &T）：写成显式 &(*y)，类型已变、需新临时量，期间原引用只读、可共存。
+//   · 借出可变引用（&mut T → &mut T）：写成 copy（对 &mut 而言 copy 即 reborrow），类型未变、无需新临时量，期间原引用独占挂起。
 fn ref_move_reborrow() {
-    let mut name = String::from("Charlie");
-    let x = &mut name;  // x: &mut String 
-    let y = x;          // y: &mut String  // name仍然可用
-                        // reborrow重借用技术((创建一个新的、更短生命周期的可变引用(跟y都指向同一数据)))
-                        // 原始的 x 并没有被 move 走，只是暂时“被借用”了（reborrow 期间 x 不可用），等 reborrow 结束（新引用不再活跃）后，x 又可以继续使用。
+    let mut name = String::from("Charlie");  // MIR 中为 _1: String，字符串常量存放于 alloc3。
+    let x = &mut name;   // MIR 中为 _2 = &mut _1，取得 name 的可变引用。
+    let y = x;           // 裸赋值，属 move：&mut 所有权整体转移，x 此后不可再使用。
+                         // MIR 中 x、y 均映射至 _2（debug x => _2; debug y => _2），且未出现 move _2 语句，
+                         // 系因 x 此后不再使用、move 原地复用同一局部变量 _2 所致，并非 reborrow。
 
-    say_hello(y);       // 强转(转为 &String) + reborrow(创建一个新的、更短生命周期的共享引用(跟y都指向同一数据))   // say_hello(&*y)
-    say_hello(y);       //  原始 y（可变引用）会被限制：不能再做可变操作，但可以继续做不可变操作 调用结束 y恢复
-    change_string(y);   // reborrow(创建一个新的、更短生命周期的可变引用(跟y都指向同一数据))，传递给函数            // change_string(&mut *y)
-    change_string(y);   //  原始 y 被“挂起”（不能使用 y 做任何事，包括读或写）。 reborrow 结束，y 又恢复可用
-    say_hello(y);
+    say_hello(y);        // reborrow 为共享引用。MIR：_5 = &(*_2) 将 &mut String 降级为 &String（这才是 reborrow），
+                         // 随后 _4 = <String as Deref>::deref(move _5) 强转为 &str，最后 say_hello(copy _4)；
+                         // 其中 copy _4 拷贝的是 &str（&str 为 Copy 类型），并非 reborrow。
+    say_hello(y);        // 共享引用只读、可共存：借出期间 y 不能再写、但可继续读；本次借用结束，y 恢复可用。
+    change_string(y);    // reborrow 为可变引用。MIR：change_string(copy _2)，因 &mut 非 Copy，此 copy 即 reborrow，
+                         // 等价于 &mut *_2；类型未变（仍为 &mut String），故无需新临时量，直接 copy 即可。
+    change_string(y);    // 可变引用独占：借出期间 y 被完全挂起、读写皆禁；本次借用结束，y 恢复可用。
+    say_hello(y);        // 再次 reborrow 为共享引用。
 }
 
 fn test_ref() {         // 引用基本用法

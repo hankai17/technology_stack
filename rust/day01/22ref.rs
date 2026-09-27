@@ -46,8 +46,9 @@ struct EditorState {
 
 fn update_row(mut state: &mut EditorState)  {
 	//let row = &state.file.row(0);         // failed
-	//let row = &state.file.row_mut(0);     // failed
-	let row = &mut state.file.row_mut(0);   // ok
+	//let row = &state.file.row_mut(0);     // failed 变成了 &&mut Row 即外面又套了一层 &
+	let row = &mut state.file.row_mut(0);   // ok // &mut &mut
+	let row = state.file.row_mut(0);  		// ok row: &mut Row，直接重借用
 	row.insert(0, 'a');
 }
 

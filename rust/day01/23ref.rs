@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 //use std::thread;
 
+// 主题：unsafe + 裸指针把 &T 强转成 *mut T 去改数据，绕过借用检查（BC），属于 UB。
+// 合法做法：内部可变性（UnsafeCell），即 Mutex / RefCell / Cell。
+
 struct MyClass {
     value: i32,
 }
@@ -19,21 +22,21 @@ impl MyClass {
     }
 }
 
-fn test1() {
+fn test1() {                            // 安全做法：let mut + &mut self（auto-ref 取 &mut obj）
     let mut obj = MyClass::new(42);
     println!("Value: {}", obj.get_value());
     obj.set_value(100);
     println!("New value: {}", obj.get_value());
 }
 
-fn test2() {
+fn test2() {                            // 内部可变性：Mutex 内部是 UnsafeCell，Arc 不可变也能改内部
     let obj = Arc::new(Mutex::new(MyClass::new(42)));
     println!("Value: {}", obj.lock().unwrap().get_value());
     obj.lock().unwrap().set_value(100);
     println!("New value: {}", obj.lock().unwrap().get_value());
 }
 
-fn test3() {
+fn test3() {                            // 裸指针绕过 BC：&obj → *const → *mut；写藏在方法里，躲过编译期 lint
     let obj = MyClass::new(42);
     println!("Value: {}", obj.get_value());
     
@@ -45,7 +48,7 @@ fn test3() {
     println!("New value: {}", obj.get_value());
 }
 
-fn test4() {
+fn test4() {                            // 直接 (*m_ptr) = m_obj; → 触发 invalid_reference_casting（UB）
     let obj = MyClass::new(42);
     println!("Value: {}", obj.get_value());
     
@@ -60,7 +63,7 @@ fn test4() {
     println!("New value: {}", obj.get_value());
 }
 
-fn test5() {
+fn test5() {                            // 直接 *mi_ptr = 44; → 同 test4，UB 被 lint 拦截
     let i: i32 = 10;
     let i_ptr: *const i32 = &i; 
     let mi_ptr = i_ptr as *const i32 as *mut i32;
@@ -79,6 +82,7 @@ fn main() {
 
 // cargo +nightly miri run
 // test3() 是没有问题的
+// 小结：把 &T 强转成 *mut T 再改是 UB；lint 拦直接赋值（test4 / test5），test3 因写藏在方法内而漏网，本质仍是 UB。
 /*
 
  assigning to `&T` is undefined behavior, consider using an `UnsafeCell`
