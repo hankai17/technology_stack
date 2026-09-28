@@ -7,6 +7,44 @@ fn test_move() {
     let u = s;	        // 错误
 }
 
+/*
+编译器会看 s 的类型：
+类型是否 Copy	        赋值行为	    之后 s 还能用吗
+是（如 i32、&T）	    copy（拷贝值）	    能
+否（如 Vec、String）	move（转移所有权）	不能
+*/
+
+fn test_move1() {           // 共享引用 &T —— Copy（赋值 = 拷贝）
+    let x = 42;
+    let r = &x;              // r: &i32
+
+    let r2 = r;              // 拷贝：&i32 是 Copy
+    let r3 = r;              // ✓ r 还能用，因为赋值只是复制指针
+    println!("{} {} {}", r, r2, r3);   // 42 42 42
+}
+
+fn test_move2() {           //  裸指针 *const T / *mut T —— Copy（赋值 = 拷贝）
+    let mut x = 42;
+
+    let p: *const i32 = &x;    // *const i32
+    let p2 = p;                // 拷贝
+    let p3 = p;                // ✓ p 还能用
+
+    let m: *mut i32 = &mut x;  // *mut i32
+    let m2 = m;                // 拷贝
+    let m3 = m;                // ✓ m 还能用
+}
+
+fn test_move3() {               // 可变引用 &mut T —— 不是 Copy（赋值 = move）
+    let mut s = String::from("hi");
+    let r = &mut s;            // r: &mut String
+
+    let r2 = r;                // move：&mut 不是 Copy，所有权从 r 转到 r2
+    // let r3 = r;             // ✗ error: use of moved value: `r`
+
+    r2.push_str("!");          // r2 现在是唯一的可变引用
+}
+
 fn test_clone() {
     let s = vec!["udon".to_string(),
         "ramen".to_string(),

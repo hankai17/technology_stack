@@ -41,3 +41,14 @@ fn main() {
 
 }
 
+同一操作，两种引用行为不同
+场景	&T（共享）	&mut T（可变）
+裸赋值 let y = x;	copy（拷贝，x 不受影响）	move（转移，x 永久失效）
+传参 f(y) / 方法调用 y.method()	copy（拷贝）	reborrow（临时借，用完 x 恢复）
+带类型注解 let y: &mut _ = x;	—	reborrow
+显式 let y = &mut *x;	—	reborrow
+MIR 里的标记	copy _x	赋值 move _x；传参 copy _x（=reborrow）
+核心记忆点：
+
+&T：随便传、随便赋值，都只是拷贝（copy）。
+&mut T：赋值 = move（永久失效），传参 = reborrow（临时借、用完恢复）。
