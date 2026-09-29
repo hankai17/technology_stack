@@ -1,3 +1,100 @@
-按事务执行到收尾的真实顺序串起来，再补细节。 第一，事务执行中先写 redo 的 prepare 阶段 IO，把变更的物理 delta 刷到 redo 磁盘文件，打待提交标记，这是第一阶段同步 IO。 第二，紧接着写 binlog 的同步 IO，把对应 SQL 或行变更日志落盘到 binlog 文件，确认 Server 层日志持久化。 第三，redo 打 commit 标记，和 redo 最后一次写入合并，事务正式完成对外可见。 最后后台触发异步刷盘 IO，把 buffer pool 里改好的完整数据页整页写到 ibd 数据文件，这步不阻塞事务，是事后兜底落全量数据。
+# MySQL InnoDB 两阶段提交（2PC）完整时序文档
+> 前置概念
+> - **XID**：全局事务 ID，同一个事务，同时记录在 redo log 和 binlog，崩溃恢复时用于两个日志之间配对校验。
+> - **WAL(Write-Ahead Logging)**：预写日志。**先将 redo 日志落盘，才认为事务变更具备持久化保障**。
 
-前 3 步 prepare 写 redo、落 binlog、打 commit 标记是严格顺序同步执行，缺一不可，这就是两阶段提交的核心。它最关键的就是锁死 binlog 必须落盘 最后一步异步刷盘完全不参与事务提交判定，后台自己跑，只负责把完整数据页最终落到 ibd 文件里。
+## 完整执行流程（带 IO 标记、崩溃断点）
+
+1. 事务运行阶段（DML 执行：update/insert）
+修改 buffer pool 内的数据页；生成 redo 日志（物理 delta 增量）写入`redo buffer`（内存），同步生成 undo 日志。
+此时 redo 仅存在内存 buffer，未刷磁盘；若此时崩溃，内存数据丢失，事务直接回滚。
+
+2. 进入事务提交 第一阶段：Prepare
+Prepare 阶段 redo 刷盘 IO
+2.1 InnoDB 将本事务全部 redo 日志 + `PREPARE标记` + `XID`，从 redo buffer 写入 redo log 磁盘文件，执行`fsync`同步刷盘 IO。
+崩溃点 1：本阶段 fsync 完成后，还没进入写 binlog 阶段就崩溃
+重启后读取 redo，发现`PREPARED+XID`事务；拿着 XID 检索 binlog，找不到该事务完整记录 → 使用 undo log 回滚事务。
+   - 刷盘成功后，磁盘上 redo 日志永久携带`PREPARED`标记；
+   - 内存事务状态置为 `PREPARED`；
+   - buffer pool 内的 ibd 脏数据页仍然在内存，没有刷入 ibd 磁盘文件。
+
+3. Server 层写入 binlog
+3.1 将事务对应的 binlog 事件（行变更 / 语句），携带同一个 XID写入 binlog buffer；
+3.2 执行`fsync`，将 binlog 完整刷入磁盘 binlog 文件。
+崩溃点 2：binlog fsync 刚刚成功，还没有通知 InnoDB 执行 commit，此时崩溃
+这就是经典的 2PC 中间崩溃场景。
+
+4. 第二阶段：InnoDB 提交
+Server 层确认 binlog 落盘成功后，调用 InnoDB 内部接口，发送 commit 信号。
+4.1 InnoDB 向 redo log 追加一条简短的`COMMIT`记录（状态标记 + XID）写入 redo buffer；
+该 commit 标记默认不单独执行 fsync，合并到下一次 redo 刷盘 IO，减少一次重量级同步 IO，提升吞吐。
+4.2 内存事务状态修改为 `COMMITTED`。
+到此，事务对外提交完成，客户端收到 commit 成功返回。脏页依旧停留在 buffer pool，不阻塞本次事务。
+
+5. 后台异步刷盘（与事务提交解耦，后台线程执行）
+page cleaner 后台线程，异步把 buffer pool 中修改完成的 16KB 脏数据页，整页覆盖写入 ibd 数据文件。
+
+## 崩溃恢复逻辑（对应两个崩溃断点）
+
+### 断点 1：Prepare 的 redo 已 fsync，binlog 还未 fsync，发生崩溃
+1. 重启，扫描 redo 日志，检出`PREPARED`状态事务，取出 XID；
+2. 使用 XID 检索 binlog 文件，找不到该事务完整 binlog 记录；
+3. 判断：事务没有成功写入 binlog；
+4. 动作：使用 undo log 回滚该事务。
+
+### 断点 2：binlog 已经 fsync 落盘，redo 的 commit 标记还未刷盘，发生崩溃
+1. 重启，扫描 redo 日志，检出`PREPARED`状态事务，取出 XID；
+2. 使用 XID 检索 binlog 文件，**找到完整的事务 binlog 记录**；
+3. 判断：binlog 已经持久化，主从数据必须保持一致；
+4. 动作：直接提交该 PREPARED 事务（不需要 undo 回滚），后续补写 redo 的 commit 标记。
+
+## 核心要点
+1. `PREPARE`标记不是内存变量，**持久保存在磁盘 redo 日志中**，断电不会丢失。
+2. 第一阶段 prepare 的`fsync`是**同步阻塞重量级 IO**，必须等待 redo 全部落盘，prepare 阶段才算完成，才能进入后续写 binlog 流程，不可省略。
+3. XID 是 redo log 与 binlog 之间的配对钥匙，崩溃恢复依靠它实现两边日志的一致性校验。
+4. 整个事务提交流程包含**两次必须执行的同步 fsync IO**：
+   - ① prepare 阶段 redo log fsync
+   - ② binlog fsync
+
+## 一句话浓缩
+第一阶段：把携带 PREPARE 标记 + XID 的 redo 全部 fsync 落盘；随后写 binlog 并 fsync 落盘；最后通知 InnoDB 追加 commit 标记。
+两次重量级同步 IO 保障一致性，commit 标记延后刷盘是性能优化，不破坏 crash-safe 安全。
+
+
+----------------------------------------------------
+按事务执行到收尾的真实顺序串起来，再补细节。 
+第一，事务执行中先写 redo 的 prepare 阶段 IO，把变更的物理 delta 刷到 redo 磁盘文件，打待提交标记，这是第一阶段同步 IO。 
+第二，紧接着写 binlog 的同步 IO，把对应 SQL 或行变更日志落盘到 binlog 文件，确认 Server 层日志持久化。 
+第三，redo 打 commit 标记，和 redo 最后一次写入合并，事务正式完成对外可见。 
+最后后台触发异步刷盘 IO，把 buffer pool 里改好的完整数据页整页写到 ibd 数据文件，这步不阻塞事务，是事后兜底落全量数据。
+
+前 3 步 prepare 写 redo、落 binlog、打 commit 标记是严格顺序同步执行，缺一不可，这就是两阶段提交的核心。
+它最关键的就是锁死 binlog 必须落盘 最后一步异步刷盘完全不参与事务提交判定，后台自己跑，只负责把完整数据页最终落到 ibd 文件里。
+
+只要 redo prepare 落盘，靠 redo 就能恢复事务 但是 MySQL 的 binlog 还有一个核心使命：
+主从复制。2PC 的设计目标，不只是「单机 crash-safe」，还要保证主库、从库的数据完全一致
+binlog 是主库发给从库的复制数据流。从库只认 binlog，从库**不读主库的 redo 日志
+场景：
+    主库执行事务，Prepare redo 已经 fsync 落盘，正要写 binlog，主库断电。 
+    假设：没有 2PC 校验，只要 prepare 成功就直接提交事务 结果：
+    主库重启：redo 恢复，事务提交，主库表里有这条新数据。
+    但是！主库本地的 binlog 根本没来得及写这条事务。
+    主库 dump 线程去读 binlog，找不到这条事务 → 永远不会推送给从库。
+    最终状态：主库有数据，从库没有数据 → 永久主从不一致。
+    根源：从库只读主库本地磁盘上的 binlog。 如果主库 InnoDB 里提交了事务，但是主库本地硬盘 binlog 里面没有这条记录，那么从库永远看不到这个变更，直接数据分裂。
+
+    如果我在 redo 恢复事务提交后加上一条 binlog，那这样问题就解决了？
+        不行，redo 日志存的是物理页增量(delta) 而 binlog 记录的是逻辑事件(完整的sql语句) 两者无法相互推导
+
+----------------------------------------------------
+
+### 2PC的定位：区分单机Crash-Safe 和 多日志一致性
+1. 单机 Crash-Safe：仅依赖 InnoDB redo + undo，**不需要2PC**。关闭binlog时，不需要执行两阶段提交，单机宕机依然可以安全恢复。
+2. 引入2PC的根本原因：开启binlog后，系统存在两套相互独立的日志：
+   - InnoDB redo（引擎内部物理日志）
+   - Server binlog（逻辑日志，独立文件IO）
+   这两套日志分属不同模块，想要保证同一个事务「要么两边都记录成功，要么两边都不记录」，需要两阶段提交来做原子协调。
+
+> 2PC协调的是**同一台主机上 InnoDB 和 Server binlog**，不是主库和从库。
+> 主从复制、binlog时间点恢复(PITR)，都依赖这套「本机两套日志状态对齐」的能力，是这套一致性带来的业务收益，不是2PC直接协调主从节点。
+
